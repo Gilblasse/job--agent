@@ -132,32 +132,52 @@ def content_hash(text: str) -> str:
 def cluster_postings(postings: list[RawPosting]) -> dict[str, list[RawPosting]]:
     """Group raw postings into one bucket per opportunity.
 
-    Exact signals are applied first and can merge buckets that the normalized identity
-    would have kept apart -- two differently-titled records sharing a canonical URL are
-    the same job, whatever they call themselves.
-    """
-    by_identity: dict[str, list[RawPosting]] = {}
-    url_index: dict[str, str] = {}
-    external_index: dict[tuple[str, str], str] = {}
+    Three signals can merge two postings: the normalized identity, a shared canonical
+    URL, and a shared platform id. They are applied as a union-find rather than by
+    reassigning postings one at a time, because merging is transitive and order must not
+    matter: if A and B share an identity while B and C share a URL, all three are one job
+    however they happen to arrive.
 
+    An earlier version reassigned each posting to the identity it collided with, which
+    quietly split a group whenever the colliding posting had been seen first.
+    """
+    parent: dict[str, str] = {}
+
+    def find(key: str) -> str:
+        parent.setdefault(key, key)
+        while parent[key] != key:
+            parent[key] = parent[parent[key]]
+            key = parent[key]
+        return key
+
+    def union(left: str, right: str) -> None:
+        a, b = find(left), find(right)
+        if a != b:
+            parent[b] = a
+
+    # Every signal becomes a node; a posting unions the nodes it carries.
+    keys: list[str] = []
     for posting in postings:
         identity = posting_identity(posting)
+        keys.append(identity)
+        find(identity)
 
         url_key = canonical_url(posting.apply_url or posting.url)
-        ext_key = (posting.source, posting.external_id) if posting.external_id else None
-
-        if url_key and url_key in url_index:
-            identity = url_index[url_key]
-        elif ext_key and ext_key in external_index:
-            identity = external_index[ext_key]
-
-        by_identity.setdefault(identity, []).append(posting)
         if url_key:
-            url_index[url_key] = identity
-        if ext_key:
-            external_index[ext_key] = identity
+            union(identity, f"url:{url_key}")
+        if posting.external_id:
+            union(identity, f"ext:{posting.source}:{posting.external_id}")
 
-    return by_identity
+    grouped: dict[str, list[RawPosting]] = {}
+    for posting, identity in zip(postings, keys, strict=True):
+        grouped.setdefault(find(identity), []).append(posting)
+
+    # The representative may be a url: or ext: node, which is an implementation detail.
+    # Each cluster is named by the identity of the record that will represent it, so the
+    # key stays stable across runs and matches what gets persisted.
+    return {
+        posting_identity(choose_canonical(group)): group for group in grouped.values()
+    }
 
 
 def choose_canonical(postings: list[RawPosting]) -> RawPosting:

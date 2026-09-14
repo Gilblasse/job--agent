@@ -88,3 +88,45 @@ class TestClustering:
         empty = make_posting(description="", external_id="1")
         full = make_posting(description="Own the monthly close.", external_id="2")
         assert choose_canonical([empty, full]) is full
+
+
+class TestClusteringIsOrderIndependent:
+    """Merging is transitive, so arrival order must not change the grouping.
+
+    Regression: an earlier version reassigned each posting to the identity it collided
+    with, which split a group whenever the colliding record happened to be seen first.
+    """
+
+    def test_transitive_merge_via_a_shared_url(self):
+        shared = "https://boards.greenhouse.io/acme/jobs/7"
+        a = make_posting(title="Accountant", url=shared, external_id="7")
+        b = make_posting(title="Accountant", url="https://careers.acme.com/jobs/7",
+                         external_id="7", source="careersite")
+        c = make_posting(title="Accountant (General Ledger)", url=shared + "?utm_source=x",
+                         external_id="9", source="aggregate")
+        assert len(cluster_postings([a, b, c])) == 1
+
+    def test_the_grouping_does_not_depend_on_order(self):
+        shared = "https://boards.greenhouse.io/acme/jobs/7"
+        a = make_posting(title="Accountant", url=shared, external_id="7")
+        b = make_posting(title="Different Role", url=shared, external_id="7",
+                         source="careersite")
+        c = make_posting(title="Accountant", url="https://acme.com/x", external_id="8",
+                         source="careersite")
+
+        sizes = []
+        for order in ([a, b, c], [c, b, a], [b, a, c], [c, a, b]):
+            clusters = cluster_postings(order)
+            sizes.append(sorted(len(group) for group in clusters.values()))
+        assert all(size == sizes[0] for size in sizes), sizes
+
+    def test_cluster_keys_are_stable_across_runs(self):
+        """The key is persisted, so it must not shift between runs."""
+        postings = [
+            make_posting(title="Accountant", external_id="1"),
+            make_posting(title="Accountant", url="https://careers.acme.com/jobs/1",
+                         external_id="1", source="careersite"),
+        ]
+        first = set(cluster_postings(postings))
+        second = set(cluster_postings(list(reversed(postings))))
+        assert first == second
