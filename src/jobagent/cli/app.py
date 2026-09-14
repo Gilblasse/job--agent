@@ -17,7 +17,7 @@ from ..engine.orchestrator import run_search
 from ..engine.verify import verify_jobs
 from ..infra.http import HttpFetcher
 from ..infra.store import DEFAULT_DB_PATH, Store
-from ..sources.catalog import CATALOG, EXCLUDED
+from ..sources.catalog import CATALOG, EXCLUDED, ats_adapters
 from ..sources.registry import add_from_url, import_csv, seed_registry
 from . import export as exporters
 from .render import coverage_table, doctor_table, job_panel, load_explanation, results_table
@@ -444,8 +444,15 @@ def company_seed(
         f"[green]Registry: {report.added} added, {report.existing} already present, "
         f"{report.total} total.[/green]"
     )
+
+    # A seeded board is not a searchable one. Some platforms are seeded ahead of their
+    # adapter, and reporting one number would overstate the reach.
+    shipped = set(ats_adapters())
+    usable = sum(c for p, c in report.by_platform.items() if p in shipped)
     for platform, count in sorted(report.by_platform.items(), key=lambda kv: -kv[1]):
-        console.print(f"  {platform:16} {count}")
+        suffix = "" if platform in shipped else "  [dim](no adapter shipped yet)[/dim]"
+        console.print(f"  {platform:16} {count}{suffix}")
+    console.print(f"[bold]{usable} boards are searchable with the adapters in this build.[/bold]")
 
 
 @company_app.command("add")

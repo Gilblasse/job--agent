@@ -35,9 +35,13 @@ in its registry.
 few results. That is a fact about free job data, not a defect in the filter.
 
 **The registry is the reach.** No ATS offers cross-company search — Lever says so in its
-own documentation — so discovery is fan-out over known employer boards. It ships seeded
-with 1,755 boards, and it grows as you add companies. If a company is not in it, its jobs
-are not found.
+own documentation — so discovery is fan-out over known employer boards. If a company is
+not in the registry, its jobs are not found.
+
+It ships seeded with 1,755 boards, of which **1,296 are searchable today** — the rest sit
+on SmartRecruiters and Workable, which are seeded but whose adapters are not shipped while
+a robots.txt question about them is unresolved. `jobagent company list` shows the split,
+and `jobagent sources doctor` counts only what a working adapter can actually read.
 
 ## Install
 
