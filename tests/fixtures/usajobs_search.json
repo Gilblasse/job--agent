@@ -1,0 +1,47 @@
+{
+ "SearchResult": {
+  "SearchResultCount": 1,
+  "SearchResultItems": [
+   {
+    "MatchedObjectId": "830000000",
+    "MatchedObjectDescriptor": {
+     "PositionID": "25-ACCT-001",
+     "PositionTitle": "Accountant",
+     "PositionURI": "https://www.usajobs.gov/job/830000000",
+     "ApplyURI": [
+      "https://www.usajobs.gov/job/830000000/print"
+     ],
+     "OrganizationName": "Internal Revenue Service",
+     "DepartmentName": "Department of the Treasury",
+     "PositionLocation": [
+      {
+       "LocationName": "Dallas, Texas",
+       "CountryCode": "United States"
+      }
+     ],
+     "PositionSchedule": [
+      {
+       "Name": "Full-Time"
+      }
+     ],
+     "PositionRemuneration": [
+      {
+       "MinimumRange": "72553",
+       "MaximumRange": "94317",
+       "RateIntervalCode": "PA"
+      }
+     ],
+     "PublicationStartDate": "2026-09-08",
+     "UserArea": {
+      "Details": {
+       "JobSummary": "Perform accounting operations including accounts payable.",
+       "MajorDuties": "Reconcile accounts and support cash management.",
+       "Requirements": "Bachelor's degree in accounting. CPA not required.",
+       "TeleworkEligible": "true"
+      }
+     }
+    }
+   }
+  ]
+ }
+}

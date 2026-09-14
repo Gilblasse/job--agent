@@ -1,0 +1,74 @@
+{
+ "jobs": [
+  {
+   "id": 4001,
+   "internal_job_id": 9001,
+   "title": "Accounts Payable Specialist",
+   "updated_at": "2026-09-01T10:00:00-04:00",
+   "first_published": "2026-09-01T10:00:00-04:00",
+   "requisition_id": "R-55",
+   "location": {
+    "name": "Remote - US"
+   },
+   "absolute_url": "https://boards.greenhouse.io/acme/jobs/4001",
+   "content": "&lt;p&gt;Own accounts payable and cash management.&lt;/p&gt;&lt;ul&gt;&lt;li&gt;CPA a plus&lt;/li&gt;&lt;/ul&gt;",
+   "departments": [
+    {
+     "id": 1,
+     "name": "Finance"
+    }
+   ],
+   "offices": [
+    {
+     "id": 2,
+     "name": "Remote",
+     "location": "United States"
+    }
+   ]
+  },
+  {
+   "id": 4002,
+   "internal_job_id": 9002,
+   "title": "Senior Accountant",
+   "updated_at": "2026-09-02T10:00:00-04:00",
+   "first_published": "2026-09-02T10:00:00-04:00",
+   "requisition_id": "R-56",
+   "location": {
+    "name": "Remote - US"
+   },
+   "absolute_url": "https://boards.greenhouse.io/acme/jobs/4002",
+   "content": "&lt;p&gt;Lead the close. Active CPA license required.&lt;/p&gt;",
+   "departments": [
+    {
+     "id": 1,
+     "name": "Finance"
+    }
+   ],
+   "offices": []
+  },
+  {
+   "id": 4003,
+   "internal_job_id": 9003,
+   "title": "Accountant",
+   "updated_at": "2026-09-03T10:00:00-04:00",
+   "first_published": "2026-09-03T10:00:00-04:00",
+   "requisition_id": "R-57",
+   "location": {
+    "name": "Toronto, Canada"
+   },
+   "absolute_url": "https://boards.greenhouse.io/acme/jobs/4003",
+   "content": "&lt;p&gt;Accounts payable duties.&lt;/p&gt;",
+   "departments": [],
+   "offices": [
+    {
+     "id": 3,
+     "name": "Toronto",
+     "location": "Canada"
+    }
+   ]
+  }
+ ],
+ "meta": {
+  "total": 3
+ }
+}

@@ -1,0 +1,42 @@
+[
+ {
+  "id": "l-1",
+  "text": "Junior Accountant",
+  "categories": {
+   "location": "Austin, TX",
+   "team": "Finance",
+   "commitment": "Full-time",
+   "department": "G&A",
+   "allLocations": [
+    "Austin, TX"
+   ]
+  },
+  "country": "US",
+  "workplaceType": "remote",
+  "salaryRange": {
+   "currency": "USD",
+   "interval": "per-year-salary",
+   "min": 70000,
+   "max": 90000
+  },
+  "hostedUrl": "https://jobs.lever.co/acme/l-1",
+  "applyUrl": "https://jobs.lever.co/acme/l-1/apply",
+  "descriptionPlain": "Support accounts payable and the monthly close. CPA preferred.",
+  "description": "<p>Support accounts payable.</p>",
+  "createdAt": 1788000000000
+ },
+ {
+  "id": "l-2",
+  "text": "Staff Accountant",
+  "categories": {
+   "location": "Austin, TX",
+   "team": "Finance",
+   "commitment": "Full-time"
+  },
+  "country": "US",
+  "workplaceType": "hybrid",
+  "hostedUrl": "https://jobs.lever.co/acme/l-2",
+  "descriptionPlain": "Hybrid role, 3 days onsite.",
+  "createdAt": 1788000000000
+ }
+]
