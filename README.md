@@ -1,0 +1,238 @@
+# jobagent
+
+A command-line job search engine. You describe the work you want; it searches employer
+applicant-tracking boards, filters the results hard against your rules, tells you *why*
+each job passed or failed, and remembers what it has already shown you.
+
+It is deliberately not built for any one profession. The accounting search in
+`examples/` is a test case, not the product — the same binary serves a medical biller, a
+project manager or a frontend developer by swapping a YAML file.
+
+```
+BROAD DISCOVERY  →  STRICT FILTERING  →  AUTHORITATIVE SOURCE  →  TRACKING
+```
+
+## Read this first: what it does not cover
+
+Free job data is narrower than people expect, and a tool that hides that is worse than
+one that says so.
+
+**This searches employer ATS boards and official employer systems. It does not search job
+boards or aggregators** — not Indeed, LinkedIn, ZipRecruiter, RemoteOK or Remotive. That
+is a deliberate scope choice: the payoff is that when it finds a job, the link goes to the
+employer's own posting, and the drawback is that its reach is exactly the set of companies
+in its registry.
+
+| Kind of search | Realistic coverage |
+|---|---|
+| Remote roles at tech and scale-up companies | **Good.** These employers live on Greenhouse, Lever and Ashby. |
+| Non-tech roles at those same employers (finance, HR, support, ops) | **Decent.** Their ATS boards carry every department, not just engineering. |
+| US federal roles, any occupation, any metro | **Good** via USAJOBS — but federal only. No state, city or private employers. |
+| Onsite or hybrid roles in a specific metro | **Thin.** Only what USAJOBS covers federally, plus whatever the registered Workday/Greenhouse/Lever/Ashby employers happen to advertise there. |
+| Small local employers, agencies, hourly and shift work | **Poor.** These employers mostly do not run a public ATS board. |
+
+`examples/pm-dfw-hybrid.yml` is shipped precisely because it is the hardest case. Expect
+few results. That is a fact about free job data, not a defect in the filter.
+
+**The registry is the reach.** No ATS offers cross-company search — Lever says so in its
+own documentation — so discovery is fan-out over known employer boards. If a company is
+not in the registry, its jobs are not found.
+
+It ships seeded with 1,755 boards, of which **1,296 are searchable today** — the rest sit
+on SmartRecruiters and Workable, which are seeded but whose adapters are not shipped while
+a robots.txt question about them is unresolved. `jobagent company list` shows the split,
+and `jobagent sources doctor` counts only what a working adapter can actually read.
+
+## Install
+
+```bash
+git clone https://github.com/Gilblasse/job--agent
+cd job--agent
+python -m venv .venv && . .venv/bin/activate
+pip install -e .
+```
+
+Optional, and free — it adds every US federal job to your searches. Get a key instantly at
+[developer.usajobs.gov/apirequest](https://developer.usajobs.gov/apirequest):
+
+```bash
+export JOBAGENT_USAJOBS_KEY=...
+export JOBAGENT_USAJOBS_EMAIL=...   # must be the address the key is registered to
+```
+
+## Start here
+
+```bash
+jobagent company seed        # load the bundled registry of employer boards
+jobagent sources doctor      # check this actually works from your network
+```
+
+`sources doctor` is a gate, not a diagnostic. It requires at least three ATS adapters
+returning real postings and at least 500 registered boards routed to a working adapter.
+If it fails, fix that before trusting any search results.
+
+USAJOBS credentials are optional, so leaving them unset is reported as a coverage note
+rather than a failure — you simply get no federal roles. Credentials that are set but not
+working *do* fail the gate, because that is a broken source rather than an absent one.
+
+```bash
+jobagent search create       # interactive
+jobagent run my-search
+jobagent results my-search --new
+```
+
+No network, no keys, just to see what it does:
+
+```bash
+python scripts/demo.py --db /tmp/demo.sqlite3
+jobagent results accounting-remote --db /tmp/demo.sqlite3 --rejected --explain
+```
+
+## Why a job matched, or didn't
+
+Filtering happens in two stages that never blend.
+
+**Hard gates** decide admission. A job that fails one is out, whatever else it has going
+for it — that is what "exclude Senior roles" has to mean to be worth setting.
+
+**Ranking** orders what survived, as a ledger of named contributions that sum to the
+score. There is no mystery number.
+
+```
+$ jobagent results accounting-remote --rejected --explain
+
+╭───────────────── Senior Accountant — Acme Corp ─────────────────╮
+│ Rejected because                                                │
+│   x seniority_excludes: seniority must not be ['senior', ...]   │
+│       matched 'Senior'                                          │
+│   x requirement:CPA: reject when 'CPA' is required              │
+│       matched 'CPA'                                             │
+│       stated as required via 'active': Lead the close.          │
+│       Active CPA license required.                              │
+│                                                                 │
+│ Rules satisfied                                                 │
+│   ok workplace: remote                                          │
+│   ok country: US                                                │
+╰─────────────────────────────────────────────────────────────────╯
+```
+
+### "CPA preferred" is not "CPA required"
+
+Excluding a credential cannot be a keyword match. Most postings that mention a CPA say
+"CPA preferred" or "CPA a plus", and rejecting those throws away the jobs you wanted.
+
+So each mention is read in context — the clause around it is weighed for requirement
+versus preference wording, negations are resolved first, and a genuine tie is reported as
+unconfirmed rather than guessed:
+
+| Posting says | Result |
+|---|---|
+| "CPA required", "Active CPA license required", "Must have a CPA" | **excluded** |
+| "CPA preferred", "CPA a plus", "Working toward CPA", "No CPA required" | **kept** |
+| "Our team includes a CPA" | **kept, flagged** as unconfirmed |
+
+Nothing in the code knows what a CPA is. `PMP`, `RN license`, `Series 7` and
+`security clearance` all work the same way, because the vocabulary being matched is
+ordinary English.
+
+### When a posting doesn't say
+
+Most postings omit pay, and many omit location or working arrangement. "Does not say" is
+tracked separately from "says something disqualifying" — those are different facts, and
+merging them either hides jobs or misrepresents them.
+
+By default such jobs are **kept, marked `?`, and ranked lower**. Set
+`unverifiable_policy: strict` to exclude them instead.
+
+## Commands
+
+| Command | |
+|---|---|
+| `search create [--from spec.yml]` | build a search, interactively or from YAML |
+| `search list / show / edit / export / delete` | manage saved searches |
+| `run <name> [--sources] [--budget]` | execute a search |
+| `results <name> [--new\|--rejected\|--saved\|--applied] [--explain]` | review |
+| `show <job-id>` | one job in full, with every URL it was seen at |
+| `mark <job-id> saved\|applied\|rejected` | track where you stand |
+| `coverage <name>` | which sources answered, and which did not |
+| `export <name> --format csv\|json\|md` | get the data out, reasoning included |
+| `verify <name>` | re-check whether saved jobs are still open |
+| `sources list / doctor` | what it reads; whether it works from here |
+| `company seed / add <url> / import <csv> / list` | grow the registry |
+
+## Searches are just files
+
+Everything the wizard asks can be written as YAML and run headlessly:
+
+```yaml
+name: accounting-remote
+titles: [Accounts Payable, Junior Accountant, Accountant, Cash Management]
+excluded_titles: [Staff Accountant]
+responsibilities_include: [accounts payable, cash management, bank reconciliation]
+responsibilities_exclude: [auditing, budget creation, forecasting]
+seniority_exclude: [senior, staff, management]
+excluded_requirements:
+  - term: CPA
+    when: required          # "CPA preferred" still gets through
+workplace: [remote]
+countries: [US]
+```
+
+The wizard also asks about shift patterns, licensure, travel, sponsorship and pay basis —
+the things that decide whether a job is viable outside tech, and that a tech-shaped
+questionnaire leaves out.
+
+## How it plays with other people's servers
+
+All network traffic goes through one chokepoint, so these are properties of the system
+rather than promises:
+
+- **robots.txt is respected** (RFC 9309: a 4xx means no file is published and access is
+  allowed; a 5xx is treated as a full disallow).
+- **Rate limiting is per host**, because several ATS platforms put thousands of employers
+  behind one hostname.
+- **403 stops that host for the run.** A 429 earns one wait when `Retry-After` asks for a
+  short one, then stops. Both are per-run, never permanent.
+- **Nothing is bypassed** — no CAPTCHA solving, no auth circumvention, no proxy rotation,
+  no headless browser, and deliberately **no flag to turn robots checking off**. A source
+  that cannot be read legitimately is recorded as a coverage gap.
+- **Redirects are re-checked**, so a redirect cannot walk the crawler into a disallowed
+  path.
+- Only documented public endpoints are used. `jobagent sources list` shows what is read
+  and, with reasons, what is deliberately not.
+
+## Verification status
+
+395 tests, all offline, run with `pytest`.
+
+**These have never run against a live endpoint.** The environment this was built in
+refuses every job-source host at its egress proxy, so the adapters are verified against
+fixtures constructed from each vendor's *documented* response schema, not from recorded
+traffic. That proves field mapping is correct; it cannot prove the live endpoints still
+behave as documented.
+
+Two things follow, and neither is hidden:
+
+1. **No robots.txt file was ever fetched.** The policy code is tested; the actual postures
+   of the hosts involved are unverified.
+2. Run `./scripts/live_validate.sh` on an unrestricted network before trusting results. It
+   runs the gate, all three example searches, and a re-run to confirm new-versus-seen
+   tracking, and writes a report.
+
+`pytest -m live` holds tests that hit real endpoints. They are excluded by default so CI
+never depends on third-party uptime.
+
+## Data and privacy
+
+Everything is local: one SQLite file at `~/.jobagent/jobagent.sqlite3`. Nothing is
+uploaded, no account is needed, and no telemetry is sent. Your searches and the jobs you
+mark stay on your machine.
+
+## Attribution
+
+The bundled registry is derived from [outscal/OpenJobs](https://github.com/outscal/OpenJobs)
+(MIT), filtered to platforms this tool can read.
+
+## License
+
+MIT.

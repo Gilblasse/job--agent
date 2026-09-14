@@ -1,0 +1,41 @@
+{
+ "jobs": [
+  {
+   "id": "a-1",
+   "title": "Cash Management Analyst",
+   "location": "Remote, United States",
+   "secondaryLocations": [],
+   "isRemote": true,
+   "workplaceType": "Remote",
+   "departmentName": "Finance",
+   "employmentType": "FullTime",
+   "compensationTierSummary": "$80K - $100K",
+   "publishedAt": "2026-09-05T00:00:00Z",
+   "jobUrl": "https://jobs.ashbyhq.com/acme/a-1",
+   "applyUrl": "https://jobs.ashbyhq.com/acme/a-1/application",
+   "descriptionPlain": "Own daily cash management and treasury operations.",
+   "descriptionHtml": "<p>Own daily cash management.</p>",
+   "isListed": true
+  },
+  {
+   "id": "a-2",
+   "title": "Internal Auditor",
+   "location": "Remote, United States",
+   "isRemote": true,
+   "workplaceType": "Remote",
+   "departmentName": "Finance",
+   "publishedAt": "2026-09-06T00:00:00Z",
+   "jobUrl": "https://jobs.ashbyhq.com/acme/a-2",
+   "descriptionPlain": "Lead auditing engagements across the group.",
+   "isListed": true
+  },
+  {
+   "id": "a-3",
+   "title": "Draft Role",
+   "location": "Remote",
+   "isListed": false,
+   "jobUrl": "https://jobs.ashbyhq.com/acme/a-3",
+   "descriptionPlain": "Not published."
+  }
+ ]
+}

@@ -1,0 +1,44 @@
+# The honest stress test. Non-tech, onsite/hybrid, one metro.
+#
+# Free sources skew remote and tech-heavy. With aggregators out of scope, this search
+# reaches only USAJOBS (federal only) plus whatever DFW-area roles the registry's
+# Workday/Greenhouse/Lever/Ashby tenants happen to be advertising. Expect thin results:
+# that is a property of the free source landscape, not a defect in the filter.
+name: pm-dfw-hybrid
+description: Hybrid or onsite project management roles in the Dallas-Fort Worth metro.
+
+titles:
+  - Project Manager
+  - Program Manager
+  - Project Coordinator
+related_titles:
+  - Delivery Manager
+  - Implementation Manager
+
+responsibilities_include:
+  - project plan
+  - stakeholder
+  - schedule
+  - budget tracking
+responsibilities_exclude:
+  - software development lifecycle ownership
+
+excluded_requirements:
+  - term: PMP
+    when: required
+  - term: security clearance
+    when: required
+
+seniority_exclude: [intern, management]
+
+workplace: [hybrid, onsite]
+locations:
+  - Dallas
+  - Fort Worth
+  - Irving
+  - Plano
+  - Arlington
+countries: [US]
+
+max_age_days: 45
+unverifiable_policy: flag

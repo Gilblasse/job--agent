@@ -1,0 +1,23 @@
+{
+ "total": 2,
+ "jobPostings": [
+  {
+   "title": "Project Manager",
+   "externalPath": "/job/Dallas/Project-Manager_R-1",
+   "locationsText": "Dallas, TX",
+   "postedOn": "Posted 5 Days Ago",
+   "bulletFields": [
+    "R-1"
+   ]
+  },
+  {
+   "title": "Accounts Payable Clerk",
+   "externalPath": "/job/Dallas/AP-Clerk_R-2",
+   "locationsText": "Dallas, TX",
+   "postedOn": "Posted 12 Days Ago",
+   "bulletFields": [
+    "R-2"
+   ]
+  }
+ ]
+}

@@ -1,0 +1,15 @@
+{
+ "jobPostingInfo": {
+  "title": "Project Manager",
+  "jobDescription": "<p>Hybrid role, 3 days in office. PMP preferred.</p>",
+  "location": "Dallas, TX",
+  "postedOn": "Posted 5 Days Ago",
+  "timeType": "Full time",
+  "jobReqId": "R-1",
+  "remoteType": "Hybrid",
+  "country": {
+   "alpha2Code": "US"
+  },
+  "externalUrl": "https://acme.wd5.myworkdayjobs.com/en-US/External/job/Dallas/Project-Manager_R-1"
+ }
+}
