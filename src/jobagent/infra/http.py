@@ -36,13 +36,22 @@ class HostBlocked(FetchError):
     """This host has stopped serving us for the rest of this run."""
 
 
+@dataclass(frozen=True)
 class _Unreachable:
     """Marker: robots.txt could not be read at all.
 
     Distinct from None, which means the host published no robots.txt and access is
     therefore permitted. Not being able to READ the policy is not the same as there being
     no policy, so this one fails closed.
+
+    It carries the transport error because the two causes need different responses from
+    the user and are indistinguishable without it: a host refusing us is the host's
+    decision and nothing to do about it, while a proxy or a dropped connection is the
+    user's own network and entirely fixable. Reporting both as "robots.txt could not be
+    fetched" sends people to complain to the wrong party.
     """
+
+    reason: str = ""
 
 
 @dataclass
@@ -90,7 +99,10 @@ class RobotsPolicy:
         if isinstance(parser, _Unreachable):
             # Fail closed. A tool that crawls whenever it cannot check the rules is not
             # respecting them; it is respecting them only when checking happens to work.
-            return False, "robots.txt could not be fetched, so access is not confirmed"
+            detail = f" ({parser.reason})" if parser.reason else ""
+            return False, (
+                f"robots.txt could not be fetched{detail}, so access is not confirmed"
+            )
         if parser is None:
             return True, "no robots.txt published"
         allowed = parser.can_fetch(user_agent, url)
@@ -104,8 +116,11 @@ class RobotsPolicy:
             if self._pace is not None:
                 self._pace(origin)
             response = self._client.get(f"{origin}/robots.txt", timeout=10.0)
-        except httpx.HTTPError:
-            return _Unreachable()  # cannot read the policy; see allows()
+        except httpx.HTTPError as error:
+            # The class name carries the useful distinction -- ConnectError, ProxyError,
+            # ConnectTimeout -- and str() on these is often empty.
+            detail = str(error).strip() or type(error).__name__
+            return _Unreachable(reason=detail)  # cannot read the policy; see allows()
         if response.status_code >= 500:
             parser.parse(["User-agent: *", "Disallow: /"])
             return parser

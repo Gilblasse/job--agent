@@ -519,6 +519,142 @@ def company_import(path: Path, db: str = DbOption) -> None:
         console.print(f"  [yellow]...and {len(problems) - 10} more[/yellow]")
 
 
+@company_app.command("discover")
+def company_discover(
+    db: str = DbOption,
+    platform: str | None = typer.Option(
+        None, "--platform", help="Comma-separated platforms; default is all known."
+    ),
+    crawl: str | None = typer.Option(
+        None, "--crawl", help="Common Crawl id, e.g. CC-MAIN-2026-30. Default: newest."
+    ),
+    pages: int = typer.Option(5, "--pages", help="Index pages to read per pattern."),
+    page_size: int = typer.Option(5, "--page-size", help="Index blocks per page."),
+    restart: bool = typer.Option(False, "--restart", help="Ignore saved progress."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Report without registering."),
+) -> None:
+    """Find employer boards in the Common Crawl index.
+
+    Discovery is fan-out over the registry, so the registry is the reach. This grows it
+    from an index of the public web rather than from companies somebody already knew
+    about -- and it is the only mechanism that can enumerate Workday tenants, since each
+    is its own hostname.
+
+    Sweeps are bounded and resumable: run it repeatedly rather than in one long pass.
+    """
+    from ..sources.commoncrawl import POLITE_INTERVAL, CommonCrawlDiscovery, patterns_for
+    from ..sources.registry import register_boards
+
+    store = open_store(db)
+    platforms = [p.strip() for p in platform.split(",")] if platform else None
+    pairs = patterns_for(platforms)
+    if not pairs:
+        console.print(f"[red]No patterns for {platform!r}.[/red]")
+        raise typer.Exit(1)
+
+    known = store.known_board_keys()
+    total_new = 0
+
+    # Slower than the default: the index is a free service run by a non-profit that asks
+    # callers not to overload it.
+    with HttpFetcher(min_interval=POLITE_INTERVAL) as fetcher:
+        discovery = CommonCrawlDiscovery(fetcher=fetcher, crawl=crawl)
+        try:
+            active_crawl = discovery.latest_crawl()
+        except Exception as error:  # noqa: BLE001
+            console.print(f"[red]Could not reach the Common Crawl index: {error}[/red]")
+            raise typer.Exit(1) from None
+
+        console.print(f"[dim]Crawl {active_crawl}[/dim]")
+        table = Table(title="Board discovery", title_justify="left", expand=True)
+        table.add_column("Platform", width=16)
+        table.add_column("Pattern", ratio=2)
+        table.add_column("Pages", width=10, justify="right")
+        table.add_column("URLs", width=8, justify="right")
+        table.add_column("Boards", width=8, justify="right")
+        table.add_column("New", width=6, justify="right")
+
+        for plat, pattern in pairs:
+            saved = None if restart else store.discovery_state(
+                "commoncrawl", active_crawl, pattern
+            )
+            start = int(saved["next_page"]) if saved else 0
+            if saved and saved["completed"]:
+                table.add_row(plat, pattern, "done", "-", "-", "-")
+                continue
+
+            with console.status(f"Sweeping {pattern} from page {start}..."):
+                outcome = discovery.sweep(
+                    pattern, crawl=active_crawl, start_page=start,
+                    max_pages=pages, page_size=page_size, known=known,
+                )
+
+            if not dry_run and outcome.boards:
+                register_boards(store, outcome.boards)
+            # Updated even on a dry run: Greenhouse is swept under two patterns, and
+            # without this the same board counts as new under each of them.
+            known.update(board.key() for board in outcome.boards)
+            total_new += outcome.boards_new
+
+            if not dry_run:
+                store.record_discovery(
+                    "commoncrawl", active_crawl, pattern,
+                    next_page=outcome.next_page,
+                    total_pages=outcome.total_pages,
+                    urls_seen=outcome.urls_seen,
+                    boards_found=outcome.boards_found,
+                    boards_new=outcome.boards_new,
+                    completed=outcome.complete,
+                    note=outcome.note,
+                )
+
+            span = f"{start}-{outcome.next_page}"
+            if outcome.total_pages:
+                span += f"/{outcome.total_pages}"
+            table.add_row(
+                plat, pattern, span, str(outcome.urls_seen),
+                str(outcome.boards_found), str(outcome.boards_new),
+            )
+            if outcome.note:
+                console.print(f"  [yellow]{pattern}: {outcome.note}[/yellow]")
+
+    console.print(table)
+    if dry_run:
+        console.print(f"[yellow]Dry run — {total_new} new boards NOT registered.[/yellow]")
+    else:
+        counts = store.registry_counts()
+        console.print(
+            f"[green]{total_new} new boards registered.[/green] "
+            f"Registry now {sum(counts.values())} boards."
+        )
+        console.print("[dim]Sweeps are resumable — run again to continue.[/dim]")
+
+
+@company_app.command("discovery-status")
+def company_discovery_status(db: str = DbOption) -> None:
+    """Show how far each discovery sweep has got."""
+    rows = open_store(db).discovery_report()
+    if not rows:
+        console.print("[dim]No sweeps yet. Run: jobagent company discover[/dim]")
+        return
+    table = Table(title="Discovery progress", title_justify="left", expand=True)
+    table.add_column("Crawl", width=18)
+    table.add_column("Pattern", ratio=2)
+    table.add_column("Pages", width=12, justify="right")
+    table.add_column("URLs", width=9, justify="right")
+    table.add_column("New boards", width=11, justify="right")
+    table.add_column("State", width=10)
+    for row in rows:
+        pages = f"{row['next_page']}/{row['total_pages']}" if row["total_pages"] \
+            else str(row["next_page"])
+        table.add_row(
+            row["crawl"], row["pattern"], pages, str(row["urls_seen"]),
+            str(row["boards_new"]),
+            "complete" if row["completed"] else "in progress",
+        )
+    console.print(table)
+
+
 @company_app.command("list")
 def company_list(
     db: str = DbOption,

@@ -38,10 +38,39 @@ few results. That is a fact about free job data, not a defect in the filter.
 own documentation — so discovery is fan-out over known employer boards. If a company is
 not in the registry, its jobs are not found.
 
-It ships seeded with 1,755 boards, of which **1,296 are searchable today** — the rest sit
+It ships seeded with 1,766 boards, of which **1,307 are searchable today** — the rest sit
 on SmartRecruiters and Workable, which are seeded but whose adapters are not shipped while
 a robots.txt question about them is unresolved. `jobagent company list` shows the split,
 and `jobagent sources doctor` counts only what a working adapter can actually read.
+
+### Growing the registry
+
+Because reach *is* the registry, growing it is the highest-leverage thing you can do:
+
+```bash
+jobagent company discover                  # sweep the Common Crawl index for boards
+jobagent company discover --platform workday --pages 20
+jobagent company discovery-status          # how far each sweep has got
+```
+
+[Common Crawl](https://commoncrawl.org) publishes a free, keyless index of the URLs it has
+crawled, queryable by domain pattern. Asking it for everything under `jobs.lever.co` gives
+back the boards — the cross-company index no ATS will provide. It is the only route that
+can enumerate **Workday** employers at all, because each tenant is its own hostname
+(`acme.wd5.myworkdayjobs.com`) and the tenancy triple is not guessable from a company
+name. That matters: Workday is where the large non-tech employers post the onsite US roles
+this tool covers worst.
+
+Two honest caveats. The index is a snapshot, refreshed every month or two, so a board
+opened last week is missing — which costs little, because what is harvested is *which
+employers have boards*, a durable fact, while live postings still come from the ATS APIs.
+And sweeps are deliberately slow and bounded: the index is run by a non-profit, so requests
+are paced a second apart and each run reads a few pages and saves its cursor. Run it
+repeatedly rather than in one long pass; `--restart` re-reads a pattern from the beginning.
+
+A discovered board is registered with no US signal attached. Finding a board in an index
+says the employer exists, not where it hires, and claiming otherwise would push it ahead of
+boards there is real evidence for.
 
 ## Install
 
@@ -159,6 +188,8 @@ By default such jobs are **kept, marked `?`, and ranked lower**. Set
 | `verify <name>` | re-check whether saved jobs are still open |
 | `sources list / doctor` | what it reads; whether it works from here |
 | `company seed / add <url> / import <csv> / list` | grow the registry |
+| `company discover [--platform] [--pages] [--dry-run]` | find new boards in the Common Crawl index |
+| `company discovery-status` | how far each discovery sweep has got |
 
 ## Searches are just files
 
@@ -200,10 +231,14 @@ rather than promises:
   path.
 - Only documented public endpoints are used. `jobagent sources list` shows what is read
   and, with reasons, what is deliberately not.
+- **Board discovery reads a public dataset, not search engines.** The Common Crawl index
+  is a free service whose stated purpose is programmatic querying; sweeps use a one-second
+  interval, stop at a page budget, and resume rather than restart. No search engine is
+  scraped, and no result page is parsed.
 
 ## Verification status
 
-395 tests, all offline, run with `pytest`.
+442 tests, all offline, run with `pytest`.
 
 **These have never run against a live endpoint.** The environment this was built in
 refuses every job-source host at its egress proxy, so the adapters are verified against

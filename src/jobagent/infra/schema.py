@@ -149,4 +149,30 @@ MIGRATIONS: list[tuple[int, str]] = [
     ),
 ]
 
+MIGRATIONS.append(
+    (
+        2,
+        """
+        -- Where a Common Crawl sweep got to, so it resumes instead of restarting.
+        -- The index is a free public service run by a non-profit; re-reading pages we
+        -- already read is exactly the load they ask callers not to create.
+        CREATE TABLE discovery_progress (
+            id            INTEGER PRIMARY KEY,
+            backend       TEXT NOT NULL,
+            crawl         TEXT NOT NULL,
+            pattern       TEXT NOT NULL,
+            next_page     INTEGER NOT NULL DEFAULT 0,
+            total_pages   INTEGER,
+            urls_seen     INTEGER NOT NULL DEFAULT 0,
+            boards_found  INTEGER NOT NULL DEFAULT 0,
+            boards_new    INTEGER NOT NULL DEFAULT 0,
+            completed     INTEGER NOT NULL DEFAULT 0,
+            last_note     TEXT NOT NULL DEFAULT '',
+            updated_at    TEXT NOT NULL,
+            UNIQUE(backend, crawl, pattern)
+        );
+        """,
+    )
+)
+
 SCHEMA_VERSION = MIGRATIONS[-1][0]

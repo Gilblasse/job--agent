@@ -59,6 +59,7 @@ also what makes the cloud evolution below a swap rather than a rewrite.
 | `sources/ats/*` | Per-platform adapters |
 | `sources/registry.py` | Seeding, growth, and fan-out ordering |
 | `sources/discovery.py` | Careers URL → ATS board |
+| `sources/commoncrawl.py` | Common Crawl index → employer boards; bounded, resumable sweeps |
 | `engine/planning.py` | Spec → per-source requests and budget allocation |
 | `engine/orchestrator.py` | The run: fan out, resolve, match, persist, report |
 | `engine/doctor.py` | The go/no-go gate |
@@ -139,6 +140,17 @@ what the onsite-metro case needs — so a budget, not zero. — `sources/ats/wor
 **Inflection is stemmed on the final word only.** Excluding "auditing" also catches
 "audit"; words under five characters are left alone so "plus" does not start matching
 "plush". — `domain/text.py`
+
+**Discovered boards are a month or two stale.** The Common Crawl index is a periodic
+snapshot, so a board opened last week is not in it. Accepted because the durable fact being
+harvested is *which employers have boards*, while live postings still come from the ATS
+APIs — and because the alternative, a search-engine API, no longer exists for free.
+— `sources/commoncrawl.py`
+
+**A sweep is a chore, not a crawl.** Each run reads a handful of index pages at one request
+per second and saves its cursor. A full sweep of Workday therefore takes many invocations.
+The index is run by a non-profit; pacing is the price of using it at all.
+— `sources/commoncrawl.py`
 
 **There is no response caching.** Conditional requests would cut bandwidth noticeably on
 repeat fan-outs, but honouring a 304 means storing every board body, which is not built.

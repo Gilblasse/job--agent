@@ -114,6 +114,35 @@ class TestRobotsPolicy:
         assert not allowed
         assert "could not be fetched" in note
 
+    def test_the_transport_error_is_named_so_the_user_can_act_on_it(self):
+        """"robots.txt could not be fetched" alone points the blame at the host.
+
+        A host refusing us is the host's decision; a proxy or a dead connection is the
+        user's own network and fixable. Reporting both identically sent people to
+        complain to the wrong party.
+        """
+        policy = RobotsPolicy(StubClient(raise_for="robots"), enabled=True)
+        _, note = policy.allows("https://example.com/api/jobs")
+        assert "refused" in note
+
+    def test_naming_the_cause_does_not_reopen_the_door(self):
+        # The diagnosis changed; the posture must not. Still closed.
+        policy = RobotsPolicy(StubClient(raise_for="robots"), enabled=True)
+        allowed, _ = policy.allows("https://example.com/api/jobs")
+        assert allowed is False
+
+    def test_an_error_with_no_message_still_names_its_kind(self):
+        class Silent(StubClient):
+            def _response(self, method, url):
+                if "robots" in url:
+                    raise httpx.ConnectTimeout("")
+                return super()._response(method, url)
+
+        policy = RobotsPolicy(Silent(), enabled=True)
+        allowed, note = policy.allows("https://example.com/api/jobs")
+        assert not allowed
+        assert "ConnectTimeout" in note
+
     def test_a_published_empty_robots_still_permits(self):
         """Distinguished from the above: a host that publishes no rules allows access."""
         policy = RobotsPolicy(StubClient({"/robots.txt": (404, "", {})}), enabled=True)

@@ -137,6 +137,30 @@ def _truthy(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "y", "us", "united states"}
 
 
+def register_boards(
+    store: Store, boards: list, *, source: str = "commoncrawl", us_signal: bool = False
+) -> int:
+    """Persist discovered boards, returning how many were genuinely new.
+
+    ``us_signal`` defaults to False here, unlike user-added boards. A board found by
+    sweeping an index carries no evidence about where it hires, and marking it US-signal
+    would push it ahead of boards we have actual evidence for in the fan-out order.
+    """
+    added = 0
+    for board in boards:
+        is_new = store.add_company(
+            company=board.token,
+            ats=board.platform,
+            token=board.registry_token(),
+            board_url=board.url,
+            source=source,
+            us_signal=us_signal,
+            notes=json.dumps(board.extra) if board.extra else "",
+        )
+        added += int(is_new)
+    return added
+
+
 def targets_for(
     store: Store, platform: str, *, limit: int, prefer_us: bool = True,
     search_text: str = "",

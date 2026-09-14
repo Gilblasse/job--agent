@@ -18,10 +18,11 @@ filters them hard with stated reasons, and remembers what it has shown.
 | M4 | Orchestrator, authority resolution, verification, new-vs-seen | done |
 | M5 | CLI, wizard, results, export | done |
 | M6 | Genericity proof, docs, live-validation handoff | done |
+| M7 | Registry growth: Common Crawl board discovery | done |
 
 ## Verification evidence
 
-- 395 tests pass (`pytest -q`), plus 12 live tests deselected by default.
+- 442 tests pass (`pytest -q`), plus 12 live tests deselected by default.
   `ruff check src tests scripts` clean.
 - Genericity proven the hard way: one corpus, three unrelated searches, different correct
   answers, no code change. A test parses `src/` and fails on profession-specific terms in
@@ -30,6 +31,31 @@ filters them hard with stated reasons, and remembers what it has shown.
   board, missing credentials.
 - `sources doctor` was run against the real network here and failed honestly, naming the
   egress refusal per source rather than implying the sources were broken.
+
+## M7 — board discovery from the Common Crawl index
+
+Added because reach *is* the registry, and the registry only grew from a vendored seed or
+the user typing a URL. Every free whole-web search API is gone as of 2026, so the index of
+a public crawl is what remains — free, keyless, non-profit, and meant to be queried.
+
+Its one irreplaceable capability: Workday tenants are hostnames, so a subdomain wildcard
+enumerates them where no `site:` query on any engine can. That is the exact gap in
+coverage — onsite, non-tech, US.
+
+Three defects found by the tests written for it, all now fixed and pinned:
+
+- `complete` compared pages read against total pages, so a resumed sweep could never be
+  marked finished, and a sweep that stopped on an error was marked finished if it happened
+  to have read enough pages. It now compares the cursor, and a sweep that stopped early is
+  never complete.
+- An empty index page ended a sweep with no note, indistinguishable in the progress table
+  from "swept and found nothing".
+- A dry run counted a board once per pattern, so Greenhouse's two hostnames reported twice
+  the boards the real run would register.
+
+Also fixed here, carried over: a robots.txt transport failure reported only "could not be
+fetched", which reads as the host refusing us. It now names the cause, so a proxy 403 is
+distinguishable from a host's decision. The fail-closed posture is unchanged and tested.
 
 ## Second review pass (GitHub Copilot, on PR #1)
 
@@ -69,12 +95,22 @@ deduplication and dead caching scaffolding.
    as a public read-only API, and `api.ashbyhq.com` reportedly 401s on `/robots.txt`.
    Both platforms are held at P2 and unshipped pending that check.
 3. **The three live searches have not run.** `scripts/live_validate.sh` is the handoff.
+4. **No Common Crawl sweep has run against the live index.** `index.commoncrawl.org` is
+   refused at this environment's egress proxy, same as every other host. The CDX response
+   shape is taken from Common Crawl's documented CDXJ format, and the parser, pagination,
+   cursor and registration path are tested against it end to end — but no real index page
+   has ever been read. The first live run is the proof.
 
 ## Next actions
 
 1. Run `./scripts/live_validate.sh` on an unrestricted network; read the gate result first.
 2. Resolve the two robots conflicts; ship SmartRecruiters and Workable only if clean.
 3. Record the real coverage of `pm-dfw-hybrid` in the README, whatever it turns out to be.
+4. Run `jobagent company discover --platform workday --pages 20` repeatedly on an
+   unrestricted network. Workday is the coverage gap and the tenants are only reachable
+   this way; the sweep is deliberately slow, so it needs several passes.
+5. Compare `pm-dfw-hybrid` before and after that sweep. If Workday discovery does not move
+   the onsite-metro case, the whole discovery route is worth less than it looks.
 
 ## Retrospective
 

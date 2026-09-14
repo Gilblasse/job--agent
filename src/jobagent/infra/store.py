@@ -402,6 +402,57 @@ class Store:
         ).fetchone()
         return json.loads(row["explanation"]) if row else {}
 
+    # ---------------------------------------------------------------- discovery
+
+    def discovery_state(self, backend: str, crawl: str, pattern: str) -> sqlite3.Row | None:
+        return self.conn.execute(
+            """SELECT * FROM discovery_progress
+               WHERE backend=? AND crawl=? AND pattern=?""",
+            (backend, crawl, pattern),
+        ).fetchone()
+
+    def record_discovery(
+        self, backend: str, crawl: str, pattern: str, *, next_page: int,
+        total_pages: int | None, urls_seen: int, boards_found: int, boards_new: int,
+        completed: bool, note: str = "",
+    ) -> None:
+        """Advance a sweep's cursor. Counters accumulate across resumptions."""
+        now = datetime.now().isoformat()
+        with self.conn:
+            self.conn.execute(
+                """INSERT INTO discovery_progress
+                   (backend, crawl, pattern, next_page, total_pages, urls_seen,
+                    boards_found, boards_new, completed, last_note, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(backend, crawl, pattern) DO UPDATE SET
+                       next_page=excluded.next_page,
+                       total_pages=COALESCE(excluded.total_pages,
+                                            discovery_progress.total_pages),
+                       urls_seen=discovery_progress.urls_seen + excluded.urls_seen,
+                       boards_found=discovery_progress.boards_found + excluded.boards_found,
+                       boards_new=discovery_progress.boards_new + excluded.boards_new,
+                       completed=excluded.completed,
+                       last_note=excluded.last_note,
+                       updated_at=excluded.updated_at""",
+                (backend, crawl, pattern, next_page, total_pages, urls_seen, boards_found,
+                 boards_new, int(completed), note, now),
+            )
+
+    def discovery_report(self, backend: str | None = None) -> list[sqlite3.Row]:
+        sql = "SELECT * FROM discovery_progress"
+        params: list[Any] = []
+        if backend:
+            sql += " WHERE backend = ?"
+            params.append(backend)
+        return list(self.conn.execute(sql + " ORDER BY crawl DESC, pattern", params))
+
+    def known_board_keys(self) -> set[tuple[str, str]]:
+        """Every (platform, token) already registered, for new-versus-known counting."""
+        return {
+            (row["ats"], row["token"])
+            for row in self.conn.execute("SELECT ats, token FROM company_registry")
+        }
+
     # ----------------------------------------------------------------- registry
 
     def add_company(
