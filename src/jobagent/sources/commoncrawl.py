@@ -16,6 +16,13 @@ One capability here has no substitute. Every Workday tenant is its own hostname,
 US roles this tool covers worst, and its tenancy triple is not guessable from a company
 name -- so this is the only practical route to those boards at scale.
 
+What it costs: a subdomain sweep is low-yield. The index is keyed by URL, not by host,
+and Common Crawl documents that introducing a subdomain wildcard makes it ignore the path
+component entirely -- so ``*.myworkdayjobs.com/`` returns every captured job URL across
+every tenant, and a few hundred URLs may collapse to a handful of new boards. That is
+inherent: there is no "list the distinct hosts" operation to ask for. Hence the page
+budget, the saved cursor, and asking for only the two fields actually read.
+
 What it is not: fresh. Crawls run every month or two, so a board that appeared last week
 is missing. That matters far less than it sounds, because what is being harvested here is
 *which employers have boards* -- a durable fact -- while the live postings still come from
@@ -175,7 +182,13 @@ class CommonCrawlDiscovery:
                 response = self.fetcher.get(
                     self._index_url(crawl),
                     params={"url": pattern, "output": "json", "page": page,
-                            "pageSize": page_size, "filter": "=status:200"},
+                            "pageSize": page_size, "filter": "=status:200",
+                            # Only the two fields that are used. A full record also
+                            # carries the WARC filename, offset, length and digest, which
+                            # are most of its bulk and of no use here -- and a subdomain
+                            # sweep pulls tens of thousands of records off somebody
+                            # else's free service.
+                            "fl": "url,status"},
                 )
             except FetchError as error:
                 outcome.note = f"stopped at page {page}: {error}"

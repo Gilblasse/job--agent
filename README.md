@@ -68,6 +68,12 @@ And sweeps are deliberately slow and bounded: the index is run by a non-profit, 
 are paced a second apart and each run reads a few pages and saves its cursor. Run it
 repeatedly rather than in one long pass; `--restart` re-reads a pattern from the beginning.
 
+Expect a **low yield per page**, especially on Workday. The index is keyed by URL rather
+than by host, and Common Crawl ignores the path component once a subdomain wildcard is
+used, so a sweep reads many job URLs to harvest comparatively few hostnames. That is
+inherent to the index — there is no "list the distinct hosts" query — which is why the
+sweep is cursored and run repeatedly rather than expected to pay off in one pass.
+
 A discovered board is registered with no US signal attached. Finding a board in an index
 says the employer exists, not where it hires, and claiming otherwise would push it ahead of
 boards there is real evidence for.
@@ -238,7 +244,7 @@ rather than promises:
 
 ## Verification status
 
-442 tests, all offline, run with `pytest`.
+444 tests, all offline, run with `pytest`.
 
 **These have never run against a live endpoint.** The environment this was built in
 refuses every job-source host at its egress proxy, so the adapters are verified against

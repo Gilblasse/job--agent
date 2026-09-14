@@ -22,7 +22,7 @@ filters them hard with stated reasons, and remembers what it has shown.
 
 ## Verification evidence
 
-- 442 tests pass (`pytest -q`), plus 12 live tests deselected by default.
+- 444 tests pass (`pytest -q`), plus 12 live tests deselected by default.
   `ruff check src tests scripts` clean.
 - Genericity proven the hard way: one corpus, three unrelated searches, different correct
   answers, no code change. A test parses `src/` and fails on profession-specific terms in
@@ -95,7 +95,13 @@ deduplication and dead caching scaffolding.
    as a public read-only API, and `api.ashbyhq.com` reportedly 401s on `/robots.txt`.
    Both platforms are held at P2 and unshipped pending that check.
 3. **The three live searches have not run.** `scripts/live_validate.sh` is the handoff.
-4. **No Common Crawl sweep has run against the live index.** `index.commoncrawl.org` is
+4. **No Common Crawl sweep has run against the live index.** Four contract details were
+   since checked against Common Crawl's published documentation and confirmed correct:
+   the `showNumPages` response shape (`{pageSize, blocks, pages}`), NDJSON one record per
+   line under `output=json`, the record's field being `url`, and pages being numbered `0`
+   to `pages-1`. The same check found two things worth fixing, both now done: `fl` can
+   restrict the returned fields, and a subdomain wildcard makes the index ignore the path,
+   so a Workday sweep is high-volume and low-yield by nature. Still unproven end to end: `index.commoncrawl.org` is
    refused at this environment's egress proxy, same as every other host. The CDX response
    shape is taken from Common Crawl's documented CDXJ format, and the parser, pagination,
    cursor and registration path are tested against it end to end — but no real index page

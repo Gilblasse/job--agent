@@ -282,6 +282,25 @@ class TestSweep:
         page_calls = [call for call in fetcher.calls if "page" in call]
         assert all(call.get("filter") == "=status:200" for call in page_calls)
 
+    def test_asks_for_only_the_fields_it_uses(self):
+        # A full CDX record is mostly WARC filename, offset, length and digest, none of
+        # which this reads. A subdomain sweep pulls tens of thousands of records off a
+        # free service, so the unused bulk is worth not requesting.
+        discovery, fetcher = self._discovery(pages=[GREENHOUSE_PAGE], num_pages=1)
+        discovery.sweep("job-boards.greenhouse.io/*")
+
+        page_calls = [call for call in fetcher.calls if "page" in call]
+        assert all(call.get("fl") == "url,status" for call in page_calls)
+
+    def test_the_page_size_matches_the_one_the_page_count_was_taken_with(self):
+        # The index computes pages as blocks // pageSize, so a count taken at one page
+        # size and read at another walks off the end or silently skips records.
+        discovery, fetcher = self._discovery(pages=[GREENHOUSE_PAGE], num_pages=1)
+        discovery.sweep("job-boards.greenhouse.io/*", page_size=20)
+
+        sizes = {call["pageSize"] for call in fetcher.calls if "pageSize" in call}
+        assert sizes == {20}
+
     def test_enumerates_workday_tenants_with_their_full_tenancy(self):
         # Workday's identity is (tenant, instance, site). A tenant name alone is not a
         # reachable board, and two sites on one tenant are two boards.
