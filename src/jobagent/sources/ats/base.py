@@ -107,6 +107,9 @@ class AtsAdapter(SourceAdapter):
 
         requests = fetcher.requests_made - before
         searched = sum(1 for o in outcomes if o.ok)
+        def boards(count: int) -> str:
+            return f"{count} board" if count == 1 else f"{count} boards"
+
         if blocked:
             status = SourceStatus.BLOCKED
             note = f"host stopped serving after {searched}/{len(targets)} boards"
@@ -115,10 +118,10 @@ class AtsAdapter(SourceAdapter):
             note = f"{searched}/{len(targets)} boards read, {failures} unavailable"
         elif failures:
             status = SourceStatus.UNAVAILABLE
-            note = f"all {failures} boards unavailable"
+            note = f"all {boards(failures)} unavailable"
         else:
             status = SourceStatus.OK
-            note = f"{searched} boards read"
+            note = f"{boards(searched)} read"
 
         result = DiscoveryResult(
             postings=dedupe_postings(postings),
