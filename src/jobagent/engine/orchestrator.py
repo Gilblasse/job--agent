@@ -125,7 +125,10 @@ def run_search(
     outcome.matches.sort(key=lambda item: item[1].score, reverse=True)
 
     store.finish_run(
-        run_id, datetime.now(), outcome.coverage, found=outcome.found,
+        # The run's own clock, not the wall clock: a caller running with a fixed clock
+        # would otherwise persist a finished_at from a different timeline than
+        # started_at.
+        run_id, now, outcome.coverage, found=outcome.found,
         matched=outcome.matched, rejected=outcome.rejected, new_count=outcome.new,
     )
     return outcome

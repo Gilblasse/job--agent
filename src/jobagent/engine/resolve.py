@@ -13,6 +13,7 @@ from ..domain.dedup import choose_canonical, cluster_postings, posting_identity
 from ..domain.models import Job, JobSourceRef, RawPosting
 from ..domain.normalize import build_job
 from ..domain.taxonomy import Taxonomy
+from ..domain.text import html_to_text
 
 
 def resolve(
@@ -46,7 +47,10 @@ def resolve(
         # several unverifiable verdicts into real ones.
         if not job.description_text:
             for posting in group:
-                text = posting.description_text
+                # Greenhouse and Workday supply description_html and no plain text, so
+                # checking only description_text left the record textless and every
+                # text-based gate unverifiable.
+                text = posting.description_text or html_to_text(posting.description_html)
                 if text:
                     job.description_text = text
                     break

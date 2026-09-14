@@ -56,10 +56,18 @@ def allocate(spec: SearchSpec, store: Store, platforms: list[str]) -> dict[str, 
     if not total:
         return dict.fromkeys(platforms, 0)
 
-    allocation: dict[str, int] = {}
-    for platform, count in counts.items():
-        allocation[platform] = max(1, round(spec.source_budget * count / total)) if count else 0
-    return allocation
+    # Largest-remainder, so the parts sum to the budget. The previous max(1, ...) floor
+    # gave every non-empty platform at least one board, so a budget of 1 across four
+    # platforms scheduled four reads and the documented total meant nothing.
+    exact = {p: spec.source_budget * c / total for p, c in counts.items() if c}
+    allocation = {p: int(v) for p, v in exact.items()}
+    remaining = spec.source_budget - sum(allocation.values())
+    for platform, _ in sorted(exact.items(), key=lambda kv: kv[1] - int(kv[1]), reverse=True):
+        if remaining <= 0:
+            break
+        allocation[platform] += 1
+        remaining -= 1
+    return {p: allocation.get(p, 0) for p in platforms}
 
 
 def build_plans(

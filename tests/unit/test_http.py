@@ -376,3 +376,43 @@ class TestTheRetryGetsTheSameChecks:
         client._response = sequenced
         fetcher = HttpFetcher(min_interval=0.0, client=client)
         assert fetcher.get("https://example.com/api").ok
+
+
+class TestPerSourceRequestMetering:
+    """Regression: budgets were measured from a counter shared by concurrent sources.
+
+    One source could spend another's allowance, and coverage reported request counts
+    inflated by whatever ran alongside it.
+    """
+
+    def test_a_meter_counts_only_its_own_thread(self):
+        client = StubClient({**ALLOW_ALL, "/api": (200, "{}", {})})
+        fetcher = HttpFetcher(min_interval=0.0, client=client)
+        seen: dict[str, int] = {}
+
+        def work(name: str, calls: int) -> None:
+            with fetcher.usage() as meter:
+                for _ in range(calls):
+                    fetcher.get(f"https://{name}.example/api")
+                seen[name] = meter.used
+
+        threads = [
+            threading.Thread(target=work, args=("a", 2)),
+            threading.Thread(target=work, args=("b", 5)),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        # Each source's own traffic plus its own robots fetch, and nobody else's.
+        assert seen["a"] == 3
+        assert seen["b"] == 6
+
+    def test_the_global_counter_still_sees_everything(self):
+        client = StubClient({**ALLOW_ALL, "/api": (200, "{}", {})})
+        fetcher = HttpFetcher(min_interval=0.0, client=client)
+        with fetcher.usage():
+            fetcher.get("https://example.com/api")
+        fetcher.get("https://example.com/api")
+        assert fetcher.requests_made == 3  # robots + two calls

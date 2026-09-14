@@ -26,6 +26,10 @@ from ..domain.models import (
 )
 from .schema import MIGRATIONS
 
+# Failure kinds that say something about the HOST or the run, not about the board.
+# Only "gone" and "parse_error" are evidence the board itself is a dead end.
+NOT_THE_BOARDS_FAULT = frozenset({"rate_limited", "blocked", "host_blocked", "unavailable"})
+
 DEFAULT_DB_DIR = Path.home() / ".jobagent"
 DEFAULT_DB_PATH = DEFAULT_DB_DIR / "jobagent.sqlite3"
 
@@ -169,8 +173,12 @@ class Store:
         *more* authoritative. A later aggregator-tier sighting must never overwrite an
         employer-tier URL that an earlier run resolved.
         """
+        # The comparison columns come back too, so an equal-authority update can be
+        # judged on whether it actually carries as much information as what is stored.
         existing = self.conn.execute(
-            "SELECT id, authority FROM jobs WHERE identity = ?", (job.identity,)
+            """SELECT id, authority, description_text, workplace, salary_min, posted_at
+               FROM jobs WHERE identity = ?""",
+            (job.identity,),
         ).fetchone()
 
         lo = job.salary.minimum if job.salary else None
@@ -198,7 +206,14 @@ class Store:
                 job_id = int(cursor.lastrowid or 0)
             else:
                 job_id = int(existing["id"])
-                if int(job.authority) >= int(existing["authority"]):
+                # Equal authority is not licence to overwrite. A later sparse sighting --
+                # exactly what a failed Workday enrichment produces -- could replace a
+                # stored description, workplace and salary with blanks, after which every
+                # text gate went unverifiable on evidence already persisted.
+                if int(job.authority) > int(existing["authority"]) or (
+                    int(job.authority) == int(existing["authority"])
+                    and _at_least_as_informative(job, existing)
+                ):
                     self.conn.execute(
                         """UPDATE jobs SET title=?, company=?, url=?, description_text=?,
                                location_raw=?, city=?, region=?, country=?, workplace=?,
@@ -232,13 +247,18 @@ class Store:
         return job_id
 
     def job_seen_by_search(self, job_id: int, search_id: int) -> bool:
-        """Has this job ever been reported for this search before?
+        """Has this job ever been SHOWN for this search before?
 
-        This single question is what separates "I found this today" from "I showed you
-        this three days ago", and it is asked before the current run's match is written.
+        This single question separates "I found this today" from "I showed you this three
+        days ago", and it is asked before the current run's verdict is written.
+
+        Only prior MATCHES count. A job that was previously rejected was never put in
+        front of the user, so when a search is later relaxed and that job qualifies, it
+        is genuinely new to them -- counting the old rejection hid it from --new.
         """
         row = self.conn.execute(
-            "SELECT 1 FROM job_search_matches WHERE job_id = ? AND search_id = ? LIMIT 1",
+            """SELECT 1 FROM job_search_matches
+               WHERE job_id = ? AND search_id = ? AND decision = 'match' LIMIT 1""",
             (job_id, search_id),
         ).fetchone()
         return row is not None
@@ -467,8 +487,13 @@ class Store:
                            last_verified=?, last_failure_kind='' WHERE id=?""",
                     (now, now, registry_id),
                 )
-            elif kind == "rate_limited":
-                # Not the board's fault; record it without counting it against the board.
+            elif kind in NOT_THE_BOARDS_FAULT:
+                # Recorded, but never counted against the board. None of these are
+                # evidence about the BOARD: a shared host throttling or refusing us says
+                # nothing about the employer behind it, an unattempted board was never
+                # tried, and a 5xx is a server having a bad day. Counting them evicted
+                # healthy boards after a handful of transient outages -- the exact
+                # failure the separate failure_kind column exists to prevent.
                 self.conn.execute(
                     "UPDATE company_registry SET last_verified=?, last_failure_kind=? WHERE id=?",
                     (now, kind, registry_id),
@@ -480,6 +505,17 @@ class Store:
                            last_verified=?, last_failure_kind=? WHERE id=?""",
                     (now, kind, registry_id),
                 )
+
+
+def _at_least_as_informative(job: Job, existing: Any) -> bool:
+    """True when ``job`` does not lose information the stored row already has."""
+    if len(job.description_text or "") < len(existing["description_text"] or ""):
+        return False
+    if job.workplace.value == "unknown" and (existing["workplace"] or "unknown") != "unknown":
+        return False
+    if job.salary is None and existing["salary_min"] is not None:
+        return False
+    return not (job.posted_at is None and existing["posted_at"])
 
 
 def row_to_job(row: Any) -> Job:

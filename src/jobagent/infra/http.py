@@ -143,6 +143,7 @@ class HttpFetcher:
         self._hosts_lock = threading.Lock()
         self._requests = 0
         self._counter_lock = threading.Lock()
+        self._local = threading.local()
 
     def _pace_host(self, origin: str) -> None:
         """Apply the per-host interval to a request made outside ``_send``."""
@@ -152,12 +153,27 @@ class HttpFetcher:
             if now < state.next_allowed:
                 time.sleep(state.next_allowed - now)
             state.next_allowed = time.monotonic() + self.min_interval
+        self._bump()
+
+    def _bump(self) -> None:
         with self._counter_lock:
             self._requests += 1
+        meter = getattr(self._local, "meter", None)
+        if meter is not None:
+            meter.record()
 
     @property
     def requests_made(self) -> int:
         return self._requests
+
+    def usage(self) -> RequestMeter:
+        """A counter for ONE source's traffic.
+
+        Sources run concurrently against this shared fetcher, so a delta of the global
+        counter includes everybody else's requests: one source could spend another's
+        budget, and reported per-source counts were inflated by whatever ran alongside.
+        """
+        return RequestMeter(self)
 
     def blocked_hosts(self) -> dict[str, str]:
         return {host: state.blocked_reason for host, state in self._hosts.items()
@@ -262,8 +278,7 @@ class HttpFetcher:
                 time.sleep(state.next_allowed - now)
             state.next_allowed = time.monotonic() + self.min_interval
 
-        with self._counter_lock:
-            self._requests += 1
+        self._bump()
 
         merged = {"Accept": "application/json, text/html;q=0.9, */*;q=0.5"}
         merged.update(headers or {})
@@ -273,6 +288,40 @@ class HttpFetcher:
             # Network-level failure, including this environment's egress policy. Reported
             # as a source-level problem so one unreachable host cannot fail a whole run.
             raise FetchError(f"{type(exc).__name__}: {exc}") from exc
+
+
+class RequestMeter:
+    """Counts the requests made by ONE source.
+
+    Thread-confined by design. Sources run concurrently on a shared fetcher, so a delta
+    of the global counter includes everyone else's traffic: one source could spend
+    another's budget, and per-source request counts in the coverage table were inflated
+    by whatever happened to run alongside. Each source plan runs on its own thread, so
+    the active meter is held in thread-local storage and only that thread's requests
+    reach it.
+    """
+
+    def __init__(self, fetcher: HttpFetcher):
+        self._fetcher = fetcher
+        self._count = 0
+        self._previous = getattr(fetcher._local, "meter", None)
+        fetcher._local.meter = self
+
+    def record(self) -> None:
+        self._count += 1  # only ever touched by its own thread
+
+    @property
+    def used(self) -> int:
+        return self._count
+
+    def close(self) -> None:
+        self._fetcher._local.meter = self._previous
+
+    def __enter__(self) -> RequestMeter:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
 
 def _parse_retry_after(value: str | None) -> float | None:

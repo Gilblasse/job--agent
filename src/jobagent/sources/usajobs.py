@@ -28,6 +28,7 @@ from ..domain.models import (
     WorkplaceType,
 )
 from ..ports import DiscoveryRequest, DiscoveryResult, Fetcher, FetchError
+from .ats.base import _meter_for, _used
 from .base import SourceAdapter, dedupe_postings
 
 API = "https://data.usajobs.gov/api/search"
@@ -69,7 +70,7 @@ class UsaJobsAdapter(SourceAdapter):
             )
         key, email = credentials
 
-        before = fetcher.requests_made
+        meter = _meter_for(fetcher)
         postings: list[RawPosting] = []
         failures: list[str] = []
         terms = request.terms or [""]
@@ -79,7 +80,7 @@ class UsaJobsAdapter(SourceAdapter):
                 # The run's budget is a cap on requests, not a suggestion. Without this
                 # a four-term, three-location search issued up to 48 requests whatever
                 # the caller asked for.
-                if fetcher.requests_made - before >= request.budget:
+                if _used(meter) >= request.budget:
                     failures.append("stopped at this run's request budget")
                     break
                 try:
@@ -96,7 +97,7 @@ class UsaJobsAdapter(SourceAdapter):
                             postings=dedupe_postings(postings),
                             report=self._report(
                                 SourceStatus.BLOCKED, found=len(postings),
-                                requests=fetcher.requests_made - before, started=started, note=note,
+                                requests=_used(meter), started=started, note=note,
                             ),
                         )
                     failures.append(note)
@@ -107,7 +108,7 @@ class UsaJobsAdapter(SourceAdapter):
         return DiscoveryResult(
             postings=dedupe_postings(postings),
             report=self._report(
-                status, found=len(postings), requests=fetcher.requests_made - before,
+                status, found=len(postings), requests=_used(meter),
                 started=started, note="; ".join(failures[:2]) or "federal postings only",
             ),
         )
@@ -172,7 +173,7 @@ class UsaJobsAdapter(SourceAdapter):
                 note=f"no credentials; set {KEY_ENV} and {EMAIL_ENV} (free, instant)",
             )
         key, email = credentials
-        before = fetcher.requests_made
+        meter = _meter_for(fetcher)
         try:
             # No keyword: the probe asks "is this source answering at all", and any
             # occupation used here would bake one profession into the health check.
@@ -183,7 +184,7 @@ class UsaJobsAdapter(SourceAdapter):
         except Exception as error:  # noqa: BLE001
             status, note = self.classify_failure(error)
             return self._report(
-                status, requests=fetcher.requests_made - before, started=started, note=note
+                status, requests=_used(meter), started=started, note=note
             )
 
         count = 0
@@ -194,12 +195,12 @@ class UsaJobsAdapter(SourceAdapter):
             )
         elif response.status in (401, 403):
             return self._report(
-                SourceStatus.BLOCKED, requests=fetcher.requests_made - before, started=started,
+                SourceStatus.BLOCKED, requests=_used(meter), started=started,
                 note=f"credentials rejected (HTTP {response.status}); check {KEY_ENV}/{EMAIL_ENV}",
             )
         status = SourceStatus.OK if count else SourceStatus.UNAVAILABLE
         return self._report(
-            status, found=count, requests=fetcher.requests_made - before, started=started,
+            status, found=count, requests=_used(meter), started=started,
             note=f"HTTP {response.status}, {count} postings",
         )
 

@@ -77,11 +77,19 @@ class AtsAdapter(SourceAdapter):
         outcomes: list[BoardOutcome] = []
         blocked = False
         failures = 0
-        before = fetcher.requests_made
+        meter = _meter_for(fetcher)
 
+        # The budget is a REQUEST allowance, not a board count. A Workday board can issue
+        # three list calls plus twenty detail calls, so treating each board as one unit
+        # let a budget of 400 become thousands of requests and made the busiest platform
+        # the likeliest to be throttled.
         attempted = targets[: request.budget]
         skipped_for_budget = len(targets) - len(attempted)
         for target in attempted:
+            if meter is not None and meter.used >= request.budget:
+                # Stop on the allowance, not on the board count.
+                skipped_for_budget += len(attempted) - len(outcomes)
+                break
             if blocked:
                 outcomes.append(BoardOutcome(target, ok=False, failure_kind="host_blocked"))
                 continue
@@ -114,7 +122,7 @@ class AtsAdapter(SourceAdapter):
                 # Empty is not failure: a real board with nothing open right now.
                 outcomes.append(BoardOutcome(target, ok=True, count=0))
 
-        requests = fetcher.requests_made - before
+        requests = meter.used if meter is not None else 0
         searched = sum(1 for o in outcomes if o.ok)
         def boards(count: int) -> str:
             return f"{count} board" if count == 1 else f"{count} boards"
@@ -159,7 +167,7 @@ class AtsAdapter(SourceAdapter):
     def check(self, fetcher: Fetcher) -> SourceReport:  # type: ignore[override]
         """Probe reference boards until one returns actual postings."""
         started = self._timer()
-        before = fetcher.requests_made
+        meter = _meter_for(fetcher)
         errors: list[str] = []
 
         for target in self.probe_targets():
@@ -170,7 +178,7 @@ class AtsAdapter(SourceAdapter):
                 status, note = self.classify_failure(error)
                 if status is SourceStatus.BLOCKED:
                     return self._report(
-                        status, requests=fetcher.requests_made - before, started=started, note=note
+                        status, requests=_used(meter), started=started, note=note
                     )
                 errors.append(f"{token}: {note}")
                 continue
@@ -181,13 +189,13 @@ class AtsAdapter(SourceAdapter):
             if postings:
                 return self._report(
                     SourceStatus.OK, found=len(postings),
-                    requests=fetcher.requests_made - before, started=started,
+                    requests=_used(meter), started=started,
                     note=f"probe tenant {token!r} returned {len(postings)} postings",
                 )
             errors.append(f"{token}: reachable but returned no postings")
 
         return self._report(
-            SourceStatus.UNAVAILABLE, requests=fetcher.requests_made - before, started=started,
+            SourceStatus.UNAVAILABLE, requests=_used(meter), started=started,
             note="; ".join(errors) or "no probe tenants configured",
         )
 
@@ -230,3 +238,16 @@ def ats_authority(url: str, domain: str | None = None) -> AuthorityTier:
     from ...domain.dedup import url_authority
 
     return url_authority(url, domain)
+
+
+def _meter_for(fetcher: Fetcher):
+    """A per-source request counter, when the fetcher provides one.
+
+    Test doubles need not implement it, so callers tolerate None.
+    """
+    usage = getattr(fetcher, "usage", None)
+    return usage() if callable(usage) else None
+
+
+def _used(meter) -> int:
+    return meter.used if meter is not None else 0

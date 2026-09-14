@@ -358,3 +358,125 @@ class TestVerificationDoesNotTrustStatusAlone:
 
         summary = verify_jobs(seeded, SameUrl(), [job_id], now=NOW)
         assert summary.live == 1
+
+
+class TestRegistryHealthOnlyCountsBoardEvidence:
+    """Regression: transient and host-wide problems evicted healthy boards.
+
+    The schema separates failure kinds precisely so throttling is not mistaken for a dead
+    tenant, and then every kind except rate limiting incremented the counter anyway. Five
+    outages behind a shared host removed a board no one had shown to be gone.
+    """
+
+    @pytest.mark.parametrize("kind", ["rate_limited", "blocked", "host_blocked", "unavailable"])
+    def test_host_and_transient_problems_do_not_count(self, store, kind):
+        store.add_company("Acme", "greenhouse", "acme")
+        row_id = store.registry_targets(limit=1)[0]["id"]
+        for _ in range(6):
+            store.record_board_outcome(row_id, ok=False, kind=kind)
+        assert store.registry_targets(limit=5), f"{kind!r} evicted a board"
+
+    def test_a_board_that_is_actually_gone_is_evicted(self):
+        from jobagent.infra.store import Store
+
+        store = Store(":memory:")
+        store.add_company("Acme", "greenhouse", "acme")
+        row_id = store.registry_targets(limit=1)[0]["id"]
+        for _ in range(6):
+            store.record_board_outcome(row_id, ok=False, kind="gone")
+        assert not store.registry_targets(limit=5)
+
+    def test_a_success_clears_the_counter(self, store):
+        store.add_company("Acme", "greenhouse", "acme")
+        row_id = store.registry_targets(limit=1)[0]["id"]
+        for _ in range(3):
+            store.record_board_outcome(row_id, ok=False, kind="gone")
+        store.record_board_outcome(row_id, ok=True)
+        assert store.registry_targets(limit=1)[0]["consecutive_failures"] == 0
+
+
+class TestSparseRecordsDoNotEraseRichOnes:
+    """Regression: an equal-authority update overwrote stored evidence with blanks."""
+
+    def _posting(self, description: str, workplace=None):
+        from jobagent.domain.models import AuthorityTier, RawPosting, WorkplaceType
+
+        return RawPosting(
+            source="greenhouse", external_id="1", title="Accountant", company="Acme",
+            url="https://boards.greenhouse.io/acme/jobs/1", location_raw="Dallas, TX",
+            description_text=description, authority=AuthorityTier.OFFICIAL_ATS,
+            workplace_hint=workplace or WorkplaceType.UNKNOWN,
+        )
+
+    def test_a_later_blank_record_does_not_wipe_the_description(self, store):
+        from jobagent.domain.models import WorkplaceType
+        from jobagent.domain.taxonomy import Taxonomy
+        from jobagent.engine.resolve import resolve
+
+        rich = resolve([self._posting("Own accounts payable.", WorkplaceType.REMOTE)],
+                       Taxonomy.default(), NOW)[0]
+        job_id = store.upsert_job(rich, NOW)
+
+        sparse = resolve([self._posting("")], Taxonomy.default(), NOW)[0]
+        store.upsert_job(sparse, NOW)
+
+        stored = store.get_job(job_id)
+        assert "accounts payable" in stored["description_text"].lower()
+        assert stored["workplace"] == "remote"
+
+    def test_a_richer_record_still_updates(self, store):
+        from jobagent.domain.taxonomy import Taxonomy
+        from jobagent.engine.resolve import resolve
+
+        thin = resolve([self._posting("Short.")], Taxonomy.default(), NOW)[0]
+        job_id = store.upsert_job(thin, NOW)
+        full = resolve([self._posting("A much longer and more useful description.")],
+                       Taxonomy.default(), NOW)[0]
+        store.upsert_job(full, NOW)
+        assert "much longer" in store.get_job(job_id)["description_text"]
+
+
+class TestRelaxingASearchSurfacesPreviouslyRejectedJobs:
+    def test_a_job_rejected_before_counts_as_new_once_it_matches(self, seeded, fetcher):
+        """Regression: any prior verdict marked a job seen, including a rejection.
+
+        A rejected job was never put in front of the user, so when the search is relaxed
+        and it qualifies, hiding it from --new hides it entirely.
+        """
+        strict = accounting_spec()
+        search_id = seeded.save_spec(strict.name, strict.to_yaml())
+        first = run_search(strict, seeded, fetcher, search_id=search_id, today=TODAY, now=NOW,
+                           only_sources=["greenhouse"])
+
+        relaxed = strict.model_copy(
+            update={"seniority_exclude": [], "excluded_requirements": []}
+        )
+        seeded.save_spec(relaxed.name, relaxed.to_yaml())
+        second = run_search(relaxed, seeded, fetcher, search_id=search_id, today=TODAY, now=NOW,
+                            only_sources=["greenhouse"])
+
+        assert second.matched > first.matched
+        newly = {job.title for job, _, is_new in second.matches if is_new}
+        assert "Senior Accountant" in newly
+
+
+class TestDescriptionBorrowHandlesHtml:
+    def test_an_html_only_record_supplies_the_missing_text(self, store):
+        """Greenhouse and Workday send HTML and no plain text."""
+        from jobagent.domain.models import AuthorityTier, RawPosting
+        from jobagent.domain.taxonomy import Taxonomy
+        from jobagent.engine.resolve import resolve
+
+        bare = RawPosting(
+            source="careersite", external_id="1", title="Accountant", company="Acme",
+            url="https://careers.acme.com/jobs/1", location_raw="Dallas, TX",
+            description_text="", authority=AuthorityTier.EMPLOYER_SITE,
+        )
+        html_only = RawPosting(
+            source="greenhouse", external_id="1", title="Accountant", company="Acme",
+            url="https://boards.greenhouse.io/acme/jobs/1", location_raw="Dallas, TX",
+            description_html="<p>Own accounts payable and the close.</p>",
+            authority=AuthorityTier.OFFICIAL_ATS,
+        )
+        job = resolve([bare, html_only], Taxonomy.default(), NOW)[0]
+        assert "accounts payable" in job.description_text.lower()
