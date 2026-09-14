@@ -26,8 +26,8 @@ from datetime import date
 
 from ...domain.models import RawPosting, WorkplaceType
 from ...domain.normalize import parse_relative_date
-from ...ports import Fetcher
-from .base import AtsAdapter, BoardTarget, ats_authority
+from ...ports import Fetcher, FetchError
+from .base import AtsAdapter, BoardTarget, ats_authority, require_ok
 
 PAGE_SIZE = 20  # hard platform limit; larger values silently return nothing
 
@@ -68,6 +68,8 @@ class WorkdayAdapter(AtsAdapter):
 
     def fetch_board(self, fetcher: Fetcher, target: BoardTarget) -> list[RawPosting]:
         base = self._base(target)
+        # Workday accepts a single search string, so a multi-title spec pushes only its
+        # first term down here; the rest are applied locally after retrieval.
         search_text = target.extra.get("search_text", "")
         postings: list[RawPosting] = []
         seen_paths: list[str] = []
@@ -82,7 +84,11 @@ class WorkdayAdapter(AtsAdapter):
                     "searchText": search_text,
                 },
             )
-            if not response.ok:
+            if page == 0:
+                # Only the first page proves the board exists; a later page failing just
+                # ends pagination.
+                require_ok(response, f"workday board {target.token!r}")
+            elif not response.ok:
                 break
             payload = response.json() or {}
             listings = payload.get("jobPostings") if isinstance(payload, dict) else None
@@ -127,6 +133,13 @@ class WorkdayAdapter(AtsAdapter):
             return
         try:
             response = fetcher.get(f"{base}/job/{tail}")
+        except FetchError as error:
+            # A blocked host must NOT be swallowed here. Descriptions are what the
+            # workplace, requirement and salary gates read, so quietly returning postings
+            # without them presents a degraded run as a healthy one.
+            if error.blocked:
+                raise
+            return
         except Exception:  # noqa: BLE001 - a missing description is not a failed board
             return
         if not response.ok:

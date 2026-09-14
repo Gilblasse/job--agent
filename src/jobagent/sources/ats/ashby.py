@@ -15,8 +15,9 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from ...domain.models import RawPosting, WorkplaceType
+from ...domain.normalize import parse_salary
 from ...ports import Fetcher
-from .base import AtsAdapter, BoardTarget, ats_authority
+from .base import AtsAdapter, BoardTarget, ats_authority, require_ok
 
 API = "https://api.ashbyhq.com/posting-api/job-board/{token}"
 
@@ -37,8 +38,7 @@ class AshbyAdapter(AtsAdapter):
         response = fetcher.get(
             API.format(token=target.token), params={"includeCompensation": "true"}
         )
-        if not response.ok:
-            return []
+        require_ok(response, f"ashby board {target.token!r}")
         payload = response.json() or {}
         jobs = payload.get("jobs") if isinstance(payload, dict) else None
         if not isinstance(jobs, list):
@@ -58,7 +58,15 @@ class AshbyAdapter(AtsAdapter):
                 str(job.get("workplaceType") or "").lower().replace(" ", ""),
                 WorkplaceType.REMOTE if job.get("isRemote") else WorkplaceType.UNKNOWN,
             )
-            locations = [job.get("location")] + list(job.get("secondaryLocations") or [])
+            # secondaryLocations is documented both as a list of strings and as a list
+            # of {"location": ...} objects depending on which reference you read, so both
+            # are accepted. Guessing one and being wrong costs every secondary location.
+            locations = [job.get("location")]
+            for entry in job.get("secondaryLocations") or []:
+                if isinstance(entry, str):
+                    locations.append(entry)
+                elif isinstance(entry, dict):
+                    locations.append(entry.get("location") or entry.get("name"))
             location_text = ", ".join(
                 str(loc) for loc in locations if isinstance(loc, str) and loc
             )
@@ -76,10 +84,18 @@ class AshbyAdapter(AtsAdapter):
                     location_raw=location_text,
                     workplace_hint=workplace,
                     employment_type=job.get("employmentType"),
-                    department=job.get("departmentName") or job.get("teamName"),
+                    # Same reason: sources disagree on departmentName/department.
+                    department=(
+                        job.get("departmentName") or job.get("department")
+                        or job.get("teamName") or job.get("team")
+                    ),
                     posted_at=_parse_date(job.get("publishedAt") or job.get("updatedAt")),
                     authority=ats_authority(url, target.domain),
-                    extra={"compensation": str(job.get("compensationTierSummary") or "")},
+                    # includeCompensation=true was being requested and then ignored, so
+                    # salary fell back to scraping the description for no reason.
+                    salary=parse_salary(
+                        str(job.get("compensationTierSummary") or "")
+                    ),
                 )
             )
         return postings

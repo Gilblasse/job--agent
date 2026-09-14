@@ -104,7 +104,11 @@ def _inflected(word: str) -> str:
     """
     escaped = re.escape(word)
     if len(word) < _MIN_WORD_FOR_STEMMING:
-        return escaped
+        # Too short to stem safely, but a trailing plural is still safe to allow, and
+        # short words here are usually acronyms: "Licensed CPAs required" must not read
+        # as no mention of a CPA at all. Only the suffix is added, never removed, so
+        # "plus" cannot become "plu".
+        return escaped + "s?" if word[-1:].isalpha() else escaped
     lowered = word.lower()
     stem = lowered
     for ending in _INFLECTIONS:

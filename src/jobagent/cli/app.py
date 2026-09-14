@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from ..domain.models import UserStatus
+from ..domain.models import SourceStatus, UserStatus
 from ..domain.spec import SearchSpec
 from ..engine.doctor import run_doctor
 from ..engine.orchestrator import run_search
@@ -163,10 +163,6 @@ def run(
     budget: int | None = typer.Option(
         None, "--budget", help="Override how many boards to fan out to."
     ),
-    no_robots: bool = typer.Option(
-        False, "--no-robots",
-        help="Skip robots.txt checks. Off by default and rarely appropriate.",
-    ),
     quiet: bool = typer.Option(False, "--quiet", help="Print only the summary."),
 ) -> None:
     """Execute a saved search."""
@@ -175,9 +171,18 @@ def run(
     if budget:
         spec = spec.model_copy(update={"source_budget": budget})
 
+    # Without this a first run quietly searches nothing: discovery is fan-out over the
+    # registry, so an empty registry means an empty result that looks like an empty market.
+    if not store.registry_counts():
+        console.print("[dim]Registry is empty; seeding it first...[/dim]")
+        report = seed_registry(store)
+        console.print(f"[dim]Seeded {report.total} employer boards.[/dim]")
+
     only = [s.strip() for s in sources.split(",")] if sources else None
 
-    with HttpFetcher(respect_robots=not no_robots) as fetcher:
+    # There is deliberately no flag to disable robots checking. Shipping one would make
+    # circumventing a site's stated wishes a supported feature of the tool.
+    with HttpFetcher() as fetcher:
         with console.status(f"Searching for {name!r}..."):
             outcome = run_search(
                 spec, store, fetcher, search_id=search_id,
@@ -199,14 +204,21 @@ def run(
             f"jobagent results {name}[/dim]"
         )
     else:
-        degraded = outcome.coverage.degraded
-        if degraded:
-            # Nothing found and sources failed are very different situations, and saying
-            # "no matches" without this would be misleading.
+        # "Nothing matched" and "nothing was searched" are different facts, and reporting
+        # the second as the first is the most misleading thing this command could do.
+        # Skipped sources count here: a skipped source searched nothing.
+        unsearched = [
+            r for r in outcome.coverage.reports if r.status is not SourceStatus.OK
+        ]
+        if unsearched:
             console.print(
-                "[yellow]No matches — but some sources did not answer. "
-                "The result may be incomplete.[/yellow]"
+                "[yellow]No matches — but "
+                f"{len(unsearched)} of {len(outcome.coverage.reports)} sources did not "
+                "fully answer, so this result may be incomplete.[/yellow]"
             )
+            for report in unsearched:
+                console.print(f"  [yellow]{report.source}: {report.status.value}[/yellow] "
+                              f"[dim]{report.note}[/dim]")
         else:
             console.print("[dim]No matches. Try relaxing a rule, or add more companies.[/dim]")
 
@@ -408,10 +420,7 @@ def sources_list() -> None:
 
 
 @sources_app.command("doctor")
-def sources_doctor(
-    db: str = DbOption,
-    no_robots: bool = typer.Option(False, "--no-robots"),
-) -> None:
+def sources_doctor(db: str = DbOption) -> None:
     """Check that this tool can actually search from here.
 
     Exits non-zero when the gate fails, so it can be used in a script.
@@ -421,7 +430,7 @@ def sources_doctor(
         console.print("[dim]Registry is empty; seeding it first...[/dim]")
         seed_registry(store)
 
-    with HttpFetcher(respect_robots=not no_robots) as fetcher:
+    with HttpFetcher() as fetcher:
         with console.status("Probing sources..."):
             result = run_doctor(store, fetcher)
 

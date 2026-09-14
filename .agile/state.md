@@ -21,7 +21,8 @@ filters them hard with stated reasons, and remembers what it has shown.
 
 ## Verification evidence
 
-- 240 tests pass (`pytest -q`), `ruff check src tests scripts` clean.
+- 337 tests pass (`pytest -q`), plus 12 live tests deselected by default.
+  `ruff check src tests scripts` clean.
 - Genericity proven the hard way: one corpus, three unrelated searches, different correct
   answers, no code change. A test parses `src/` and fails on profession-specific terms in
   executable code.
@@ -29,6 +30,18 @@ filters them hard with stated reasons, and remembers what it has shown.
   board, missing credentials.
 - `sources doctor` was run against the real network here and failed honestly, naming the
   egress refusal per source rather than implying the sources were broken.
+
+## Independent review
+
+One independent review pass was run and collected. It found 4 blocker and 7 major issues;
+all were fixed, each with a regression test. The three most serious were a pay floor that
+ignored its own period (an $11/hour role cleared a $30/hour floor while the explanation
+asserted the rule was satisfied), a salary parser that read "401k" as $401,000 and let an
+invented number cause a real rejection, and adapters reporting HTTP 404/500/401 as a
+healthy empty board, which made a mistyped API key look like an empty job market forever.
+
+Two findings were already fixed independently before the review landed: non-transitive
+deduplication and dead caching scaffolding.
 
 ## Not verified — carried into the handoff
 
@@ -59,3 +72,7 @@ locations being ranking-only — were found only when the genericity proof force
 non-tech, non-remote search through the full pipeline. Those searches should have been
 written at M2, when the gates were, rather than at M6. **Improvement for next iteration:
 write the hardest acceptance case first, not last.**
+
+The review reinforced it from a different angle: every blocker it found was in a path no
+test exercised — an hourly pay floor, a non-2xx response, a plural credential. The gaps
+were in the inputs never tried, not in the logic reasoned about.

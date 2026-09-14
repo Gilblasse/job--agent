@@ -29,8 +29,10 @@ SOURCE_URL = (
 )
 OUTPUT = Path(__file__).resolve().parents[1] / "src" / "jobagent" / "data" / "companies.seed.json"
 
-# Platforms with a working adapter. A company routed to anything else would sit in the
-# registry consuming ordering slots while never being fetched.
+# Platforms this project can route to. The first four have shipped adapters; the last two
+# are seeded ahead of theirs, which are held back pending a robots.txt question, so they
+# sit in the registry unread. `jobagent company seed` reports the split rather than
+# implying every seeded board is searchable.
 SUPPORTED = {"greenhouse", "lever", "ashby", "workday", "smartrecruiters", "workable"}
 
 US_NAMES = {"united states", "usa", "us", "united states of america"}

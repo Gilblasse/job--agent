@@ -16,8 +16,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from enum import StrEnum
 
-from .models import GateOutcome, GateResult, Job, WorkplaceType
-from .normalize import detect_seniority
+from .models import GateOutcome, GateResult, Job, SalaryRange, WorkplaceType
+from .normalize import detect_seniority_levels
 from .taxonomy import Taxonomy
 from .text import (
     clause_around,
@@ -99,13 +99,22 @@ def _heading_context(text: str, position: int, taxonomy: Taxonomy) -> str | None
     candidates = [(h, "required") for h in taxonomy.requirement_headings]
     candidates += [(h, "preferred") for h in taxonomy.preference_headings]
     for heading, kind in candidates:
-        index = window.rfind(heading)
-        if index < 0:
-            continue
-        ranked = (index + len(heading), len(heading), kind)
-        if best is None or ranked[:2] > best[:2]:
-            best = ranked
+        for match in _heading_occurrences(window, heading):
+            ranked = (match + len(heading), len(heading), kind)
+            if best is None or ranked[:2] > best[:2]:
+                best = ranked
     return best[2] if best else None
+
+
+# A heading starts a line and is followed by a colon or a line break. Matching the bare
+# words anywhere meant a sentence like "we have no specific requirements" promoted every
+# credential mentioned in the next 1500 characters to "required".
+def _heading_occurrences(window: str, heading: str) -> list[int]:
+    pattern = re.compile(
+        r"(?:^|\n)[\s\-*#>]{0,4}" + re.escape(heading) + r"\s*[:\-–—]?\s*(?:\n|$)",
+        re.IGNORECASE,
+    )
+    return [m.start() for m in pattern.finditer(window)]
 
 
 def classify_requirement(text: str, term: str, taxonomy: Taxonomy) -> RequirementFinding:
@@ -126,14 +135,15 @@ def classify_requirement(text: str, term: str, taxonomy: Taxonomy) -> Requiremen
     if not text or not term:
         return RequirementFinding(RequirementContext.ABSENT)
 
-    occurrences = find_all_phrases(text, term)
+    # inflect: 'Licensed CPAs required' must not read as absent just for the plural.
+    occurrences = find_all_phrases(text, term, inflect=True)
     if not occurrences:
         return RequirementFinding(RequirementContext.ABSENT)
 
     findings: list[RequirementFinding] = []
     for span in occurrences:
         clause = clause_around(text, span)
-        local = find_phrase(clause, term)
+        local = find_phrase(clause, term, inflect=True)
         if not local:
             continue
 
@@ -356,12 +366,18 @@ class SeniorityExcludeGate(Gate):
         rule = f"seniority must not be {self.levels}"
         if not self.levels:
             return self._pass(rule, detail="no seniority exclusion configured")
-        level, evidence = detect_seniority(job.title, taxonomy)
-        if level is None:
+        found = detect_seniority_levels(job.title, taxonomy)
+        if not found:
             return self._unknown(rule, f"title {job.title!r} states no seniority level")
-        if level in self.levels:
-            return self._fail(rule, evidence=evidence, detail=f"detected level {level!r}")
-        return self._pass(rule, evidence=evidence or level, detail=f"detected level {level!r}")
+
+        # Every level the title names is checked, not just the highest. "Senior Staff
+        # Accountant" names both, and a search excluding "senior" must catch it even
+        # though "staff" outranks it.
+        for level, evidence in found:
+            if level in self.levels:
+                return self._fail(rule, evidence=evidence, detail=f"detected level {level!r}")
+        detected = ", ".join(level for level, _ in found)
+        return self._pass(rule, evidence=found[0][1], detail=f"detected level {detected!r}")
 
 
 @dataclass
@@ -429,15 +445,28 @@ class RequirementGate(Gate):
 class SalaryFloorGate(Gate):
     """The advertised pay must clear a floor.
 
+    The floor is annualized before comparison, using the period the user gave it in.
+    Without that, "at least $30 an hour" was compared against an annual figure, so a
+    $11/hour role cleared a $30 floor by a factor of two thousand and the explanation
+    cheerfully reported the rule as satisfied.
+
     Most postings publish no pay at all, so the default policy is FLAG. Running this
     strict silently discards the majority of the market.
     """
 
     minimum: float = 0.0
+    period: str = "year"
     name: str = "salary_floor"
 
+    def annual_floor(self) -> float:
+        return SalaryRange(minimum=self.minimum, period=self.period).annualized()[0] or 0.0
+
     def evaluate(self, job: Job, taxonomy: Taxonomy, today: date) -> GateResult:
-        rule = f"annualized pay must be at least {self.minimum:,.0f}"
+        floor = self.annual_floor()
+        rule = (
+            f"pay must be at least {self.minimum:,.0f} per {self.period} "
+            f"({floor:,.0f}/year)"
+        )
         if not self.minimum:
             return self._pass(rule, detail="no salary floor configured")
         if job.salary is None:
@@ -446,9 +475,9 @@ class SalaryFloorGate(Gate):
         best = high or low
         if best is None:
             return self._unknown(rule, "pay range has no usable figure")
-        if best >= self.minimum:
-            return self._pass(rule, evidence=f"{best:,.0f}")
-        return self._fail(rule, evidence=f"{best:,.0f}")
+        if best >= floor:
+            return self._pass(rule, evidence=f"{best:,.0f}/year")
+        return self._fail(rule, evidence=f"{best:,.0f}/year")
 
 
 @dataclass
@@ -523,3 +552,43 @@ class LocationGate(Gate):
         if hit:
             return self._pass(rule, evidence=hit[0], detail=job.location.display())
         return self._fail(rule, evidence=job.location.display())
+
+
+@dataclass
+class EmploymentTypeGate(Gate):
+    """The role must be one of the employment types the user will take.
+
+    A user who says "full-time only" and is shown a 1099 contract has been ignored, not
+    served. Postings state this inconsistently, so an unstated type is UNVERIFIABLE
+    rather than a rejection.
+    """
+
+    allowed: list[str] = field(default_factory=list)
+    name: str = "employment_type"
+
+    def evaluate(self, job: Job, taxonomy: Taxonomy, today: date) -> GateResult:
+        rule = f"employment type must be one of {self.allowed}"
+        if not self.allowed:
+            return self._pass(rule, detail="no employment-type requirement configured")
+
+        # The posting's own field first; it is the only reliable statement of this.
+        declared = job.employment_type
+        if declared:
+            normalized = _normalize_employment(declared, taxonomy)
+            if normalized is None:
+                return self._unknown(rule, f"unrecognized employment type {declared!r}")
+            if normalized in self.allowed:
+                return self._pass(rule, evidence=normalized, detail=f"posting says {declared!r}")
+            return self._fail(rule, evidence=normalized, detail=f"posting says {declared!r}")
+        return self._unknown(rule, "posting does not state an employment type")
+
+
+def _normalize_employment(value: str, taxonomy: Taxonomy) -> str | None:
+    """Map a posting's own wording onto the taxonomy's labels."""
+    if value in taxonomy.employment_types:
+        return value
+    for label, terms in taxonomy.employment_types.items():
+        for term in terms:
+            if find_phrase(value, term):
+                return label
+    return None

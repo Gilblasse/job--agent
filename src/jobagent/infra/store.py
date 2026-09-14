@@ -391,8 +391,13 @@ class Store:
     ) -> bool:
         """Register a company board. Returns True when the row is new."""
         now = datetime.now().isoformat()
+        # SQLite reports rowcount 1 for an ON CONFLICT UPDATE as well as an INSERT, so
+        # existence is checked first. Without this, re-seeding claimed every row was new.
+        existed = self.conn.execute(
+            "SELECT 1 FROM company_registry WHERE ats = ? AND token = ?", (ats, token)
+        ).fetchone() is not None
         with self.conn:
-            cursor = self.conn.execute(
+            self.conn.execute(
                 """INSERT INTO company_registry
                    (company, domain, ats, token, board_url, source, us_signal, first_seen, notes)
                    VALUES (?,?,?,?,?,?,?,?,?)
@@ -404,7 +409,7 @@ class Store:
                        us_signal=MAX(excluded.us_signal, company_registry.us_signal)""",
                 (company, domain, ats, token, board_url, source, int(us_signal), now, notes),
             )
-        return cursor.rowcount == 1 and cursor.lastrowid is not None
+        return not existed
 
     def registry_targets(
         self, *, platforms: list[str] | None = None, limit: int = 500,

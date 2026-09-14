@@ -53,11 +53,15 @@ class RobotsPolicy:
     while documenting the endpoint beneath it as a public read-only API.
     """
 
-    def __init__(self, client: httpx.Client, enabled: bool = True):
+    def __init__(self, client: httpx.Client, enabled: bool = True, pace=None):
         self._client = client
         self._enabled = enabled
+        self._pace = pace
         self._cache: dict[str, urllib.robotparser.RobotFileParser | None] = {}
-        self._lock = threading.Lock()
+        # One lock per origin rather than one global lock: holding a single lock across
+        # the robots fetch serialized the first request to EVERY host behind the first.
+        self._locks: dict[str, threading.Lock] = {}
+        self._registry_lock = threading.Lock()
 
     def allows(self, url: str, user_agent: str = USER_AGENT) -> tuple[bool, str]:
         if not self._enabled:
@@ -65,7 +69,9 @@ class RobotsPolicy:
         parts = urlsplit(url)
         origin = f"{parts.scheme}://{parts.netloc}"
 
-        with self._lock:
+        with self._registry_lock:
+            lock = self._locks.setdefault(origin, threading.Lock())
+        with lock:
             if origin not in self._cache:
                 self._cache[origin] = self._load(origin)
             parser = self._cache[origin]
@@ -78,6 +84,8 @@ class RobotsPolicy:
     def _load(self, origin: str) -> urllib.robotparser.RobotFileParser | None:
         parser = urllib.robotparser.RobotFileParser()
         try:
+            if self._pace is not None:
+                self._pace(origin)
             response = self._client.get(f"{origin}/robots.txt", timeout=10.0)
         except httpx.HTTPError:
             return None  # unreachable robots is treated as absent, not as a prohibition
@@ -113,11 +121,22 @@ class HttpFetcher:
         self._client = client or httpx.Client(
             timeout=timeout, follow_redirects=True, headers={"User-Agent": user_agent}
         )
-        self.robots = RobotsPolicy(self._client, enabled=respect_robots)
+        self.robots = RobotsPolicy(self._client, enabled=respect_robots, pace=self._pace_host)
         self._hosts: dict[str, _HostState] = {}
         self._hosts_lock = threading.Lock()
         self._requests = 0
         self._counter_lock = threading.Lock()
+
+    def _pace_host(self, origin: str) -> None:
+        """Apply the per-host interval to a request made outside ``_send``."""
+        state = self._state(urlsplit(origin).netloc)
+        with state.lock:
+            now = time.monotonic()
+            if now < state.next_allowed:
+                time.sleep(state.next_allowed - now)
+            state.next_allowed = time.monotonic() + self.min_interval
+        with self._counter_lock:
+            self._requests += 1
 
     @property
     def requests_made(self) -> int:
@@ -170,6 +189,15 @@ class HttpFetcher:
             raise HostBlocked(f"{host}: {note}", blocked=True)
 
         response = self._send(method, url, state, params=params, json=json, headers=headers)
+
+        # A redirect can land on a different host, or on a path the origin disallows.
+        # Checking only the URL we asked for would let a redirect walk us past robots.
+        final = str(response.url)
+        if final != url:
+            allowed, note = self.robots.allows(final, self.user_agent)
+            if not allowed:
+                self._state(urlsplit(final).netloc).blocked_reason = note
+                raise HostBlocked(f"redirected to a disallowed location: {final}", blocked=True)
 
         # 403 is a refusal, not a hiccup. Retrying it is how a polite client turns into
         # an impolite one, so the host is set aside for the rest of the run.

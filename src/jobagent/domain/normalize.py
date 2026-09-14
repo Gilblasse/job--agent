@@ -47,7 +47,7 @@ _STATE_ABBREVS = set(US_STATES.values())
 US_PHRASES: list[str] = [
     "united states", "usa", "u.s.a.", "u.s.", "us based", "us-based", "united states of america",
     "remote us", "remote - us", "remote (us)", "us remote", "anywhere in the us",
-    "anywhere in the united states", "us only", "nationwide", "domestic us",
+    "anywhere in the united states", "us only", "domestic us",
     "authorized to work in the united states", "must reside in the us",
 ]
 
@@ -192,12 +192,39 @@ def infer_workplace(
     return WorkplaceType.UNKNOWN, ""
 
 
+# Cues that a number nearby is actually pay. Without one, a "$25 lunch allowance",
+# a "401k match" and a "$5,000,000 annual budget" all read as compensation -- and the
+# first two are far more common in postings than a stated salary is.
+_PAY_CUES = re.compile(
+    r"""(salary|salaries|compensation|pay\s*(?:range|rate|band)?|base\s+pay|base\s+salary
+        |wage|hourly\s*(?:rate)?|annual(?:ized)?\s+(?:pay|salary|compensation)
+        |per\s+(?:hour|year|annum|month|week)|/\s*(?:hr|hour|yr|year|mo|month)
+        |starting\s+at|range\s+of|earn(?:s|ing)?\s+up\s+to|\bDOE\b)""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+# Retirement-plan names are numerals followed by a letter and would otherwise parse as
+# money. "401k" appears in a large share of US postings and became $401,000.
+_NOT_MONEY = re.compile(r"\b(401\s*[kK]|403\s*[bB]|457\s*[bB]|529)\b")
+
 _MONEY = re.compile(
     r"""(?P<cur>[$€£])?\s*
         (?P<num>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)
         \s*(?P<suffix>k\b|m\b)?""",
     re.IGNORECASE | re.VERBOSE,
 )
+
+# A stated range: two figures joined by a dash, "to", or "up to". This is what a real
+# pay disclosure looks like, and preferring it avoids pairing a salary with an unrelated
+# number elsewhere in the text.
+_RANGE = re.compile(
+    r"""(?P<cur>[$€£])?\s*(?P<low>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\s*
+        (?P<lowsuf>[kKmM])?\s*(?:-|–|—|to|through|up\s+to)\s*
+        (?P<cur2>[$€£])?\s*(?P<high>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\s*
+        (?P<highsuf>[kKmM])?""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
 _PERIOD_HINTS = [
     (["per hour", "/hour", "/hr", "hourly", "an hour", "per hr"], "hour"),
     (["per day", "/day", "daily"], "day"),
@@ -206,80 +233,121 @@ _PERIOD_HINTS = [
     (["per year", "/year", "annually", "per annum", "annual", "/yr"], "year"),
 ]
 
+_PAY_WINDOW = 120  # characters either side of a figure that may carry the pay cue
+
+
+def _scale(value: str, suffix: str | None) -> float | None:
+    try:
+        number = float(value.replace(",", ""))
+    except ValueError:
+        return None
+    if suffix and suffix.lower() == "k":
+        number *= 1_000
+    elif suffix and suffix.lower() == "m":
+        number *= 1_000_000
+    return number
+
+
+def _period_for(window: str, default: str = "year") -> str:
+    lowered = window.lower()
+    for needles, name in _PERIOD_HINTS:
+        if any(needle in lowered for needle in needles):
+            return name
+    return default
+
 
 def parse_salary(text: str) -> SalaryRange | None:
     """Extract an advertised pay range from free text.
 
-    Returns None when nothing looks like pay. Guessing here would corrupt a salary floor
-    gate, so the bar for reporting a number is deliberately high: values must carry a
-    currency symbol, a ``k``/``m`` suffix, or thousands separators.
+    Returns None unless a figure sits near an explicit pay cue. That bar is deliberately
+    high: most postings state no pay, and a parser that guesses turns a wellness stipend
+    into a salary and then lets a pay-floor gate reject the job over it -- an invented
+    number causing a real rejection.
     """
     if not text:
         return None
-    lowered = text.lower()
 
-    period = "year"
-    for needles, name in _PERIOD_HINTS:
-        if any(n in lowered for n in needles):
-            period = name
-            break
+    masked = _NOT_MONEY.sub(" ", text)
 
-    values: list[float] = []
-    currency = "USD"
-    for match in _MONEY.finditer(text):
-        has_currency = bool(match.group("cur"))
-        suffix = (match.group("suffix") or "").lower()
-        number_text = match.group("num")
-        if not has_currency and not suffix and "," not in number_text:
-            continue  # a bare integer is far more often a year or a count than money
-        try:
-            value = float(number_text.replace(",", ""))
-        except ValueError:
+    # A stated range near a pay cue is the strongest signal, so it wins outright.
+    for match in _RANGE.finditer(masked):
+        window = masked[max(0, match.start() - _PAY_WINDOW):match.end() + _PAY_WINDOW]
+        has_currency = bool(match.group("cur") or match.group("cur2"))
+        if not (_PAY_CUES.search(window) or has_currency):
             continue
-        if suffix == "k":
-            value *= 1_000
-        elif suffix == "m":
-            value *= 1_000_000
-        if match.group("cur") == "€":
-            currency = "EUR"
-        elif match.group("cur") == "£":
-            currency = "GBP"
-        values.append(value)
+        low = _scale(match.group("low"), match.group("lowsuf"))
+        high = _scale(match.group("high"), match.group("highsuf"))
+        if low is None or high is None or high < low:
+            continue
+        if not has_currency and not (match.group("lowsuf") or "," in match.group("low")):
+            continue  # bare "3 to 5" is years of experience, not money
+        return SalaryRange(
+            minimum=low, maximum=high if high != low else None,
+            currency=_currency(match.group("cur") or match.group("cur2")),
+            period=_period_for(window),
+        )
 
-    if not values:
-        return None
+    # Otherwise accept a single figure, and only when a pay cue is genuinely nearby.
+    for match in _MONEY.finditer(masked):
+        suffix = match.group("suffix")
+        number_text = match.group("num")
+        if not match.group("cur") and not suffix and "," not in number_text:
+            continue
+        window = masked[max(0, match.start() - _PAY_WINDOW):match.end() + _PAY_WINDOW]
+        if not _PAY_CUES.search(window):
+            continue
+        value = _scale(number_text, suffix)
+        if value is None:
+            continue
+        return SalaryRange(
+            minimum=value, maximum=None, currency=_currency(match.group("cur")),
+            period=_period_for(window),
+        )
 
-    # An hourly figure written as an annual-sized number means the period hint was wrong.
-    if period == "hour" and max(values) > 2_000:
-        period = "year"
-    if period == "year" and max(values) < 250:
-        period = "hour"
-
-    low, high = min(values), max(values)
-    return SalaryRange(
-        minimum=low, maximum=high if high != low else None, currency=currency, period=period
-    )
+    return None
 
 
-def detect_seniority(title: str, taxonomy: Taxonomy) -> tuple[str | None, str]:
-    """Identify the seniority level named in a title.
+def _currency(symbol: str | None) -> str:
+    return {"€": "EUR", "£": "GBP"}.get(symbol or "", "USD")
+
+
+def detect_seniority_levels(title: str, taxonomy: Taxonomy) -> list[tuple[str, str]]:
+    """Every seniority level named in a title, with the word that named it.
+
+    A title can name two: "Senior Staff Accountant" and "Senior Director of Finance" both
+    do. Returning only the highest meant a search excluding "senior" let both through,
+    because the title reported "staff" and "management" respectively.
 
     Reads the title only. Descriptions routinely mention reporting lines ("partners with
-    senior leadership") that have nothing to do with the level of the advertised role.
-
-    Scans highest level first so "Senior Staff Engineer" reports staff, not senior.
+    senior leadership") that say nothing about the level of the advertised role.
     """
     if not title:
-        return None, ""
-    for label in reversed(list(taxonomy.seniority)):
+        return []
+    found: list[tuple[str, str]] = []
+    for label in taxonomy.seniority:
         for term in taxonomy.seniority[label]:
             # Short tokens are noisy, so only the unambiguous ones are matched.
             if len(term) <= 2 and term not in {"sr", "jr", "ii", "iv", "vp"}:
                 continue
             span = find_phrase(title, term)
             if span:
-                return label, title[span[0]:span[1]]
-    return None, ""
+                found.append((label, title[span[0]:span[1]]))
+                break
+    return found
+
+
+def detect_seniority(title: str, taxonomy: Taxonomy) -> tuple[str | None, str]:
+    """The highest seniority level named in a title, for ranking and display.
+
+    Filtering uses ``detect_seniority_levels`` instead: for an exclusion, every level
+    named matters, not just the top one.
+    """
+    levels = detect_seniority_levels(title, taxonomy)
+    if not levels:
+        return None, ""
+    order = list(taxonomy.seniority)
+    highest = max(levels, key=lambda item: order.index(item[0]))
+    return highest
 
 
 def detect_employment_type(text: str, taxonomy: Taxonomy) -> str | None:
@@ -347,7 +415,10 @@ def build_job(
         workplace, _ = infer_workplace(description[:4000], taxonomy)
 
     if location.country is None:
-        country, _ = detect_country(f"{posting.location_raw}\n{description[:4000]}")
+        # Title and location only. Scanning the description let "we are a United States
+        # company" in the boilerplate of a Toronto posting resolve the job to the US and
+        # slip past a US-only gate.
+        country, _ = detect_country(f"{posting.title}\n{posting.location_raw}")
         if country:
             location = Location(
                 raw=location.raw, city=location.city, region=location.region, country=country

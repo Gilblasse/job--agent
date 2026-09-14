@@ -78,9 +78,23 @@ def build_plans(
     for platform in platforms:
         limit = allocation.get(platform, 0)
         if not limit:
+            # Still planned, with no boards. Dropping it here removed the platform from
+            # the coverage table altogether, so a fresh install reported "No matches"
+            # while silently never having searched anything.
+            plans.append(
+                SourcePlan(
+                    source=platform, boards=0,
+                    request=DiscoveryRequest(
+                        terms=terms, countries=spec.countries, locations=spec.locations,
+                        fetcher=fetcher, budget=0, since=since, today=today, targets=[],
+                    ),
+                )
+            )
             continue
         # Only Workday offers real server-side search, so only Workday gets the query
         # pushed down; the rest return whole boards and are filtered locally.
+        # It takes ONE search string, so the first term is used and the rest are not
+        # queried there. The adapter records that, rather than leaving the gap silent.
         search_text = terms[0] if (platform == "workday" and terms) else ""
         targets = targets_for(store, platform, limit=limit, search_text=search_text)
         plans.append(
@@ -89,7 +103,8 @@ def build_plans(
                 boards=len(targets),
                 request=DiscoveryRequest(
                     terms=terms, countries=spec.countries, locations=spec.locations,
-                    fetcher=fetcher, budget=limit, since=since, targets=list(targets),
+                    fetcher=fetcher, budget=limit, since=since, today=today,
+                    targets=list(targets),
                 ),
             )
         )
@@ -100,7 +115,7 @@ def build_plans(
                 source="usajobs",
                 request=DiscoveryRequest(
                     terms=terms, countries=spec.countries, locations=spec.locations,
-                    fetcher=fetcher, budget=spec.source_budget, since=since,
+                    fetcher=fetcher, budget=spec.source_budget, since=since, today=today,
                 ),
             )
         )

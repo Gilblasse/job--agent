@@ -190,14 +190,16 @@ rather than promises:
 - **403 stops that host for the run.** A 429 earns one wait when `Retry-After` asks for a
   short one, then stops. Both are per-run, never permanent.
 - **Nothing is bypassed** — no CAPTCHA solving, no auth circumvention, no proxy rotation,
-  no headless browser. A source that cannot be read legitimately is recorded as a coverage
-  gap.
+  no headless browser, and deliberately **no flag to turn robots checking off**. A source
+  that cannot be read legitimately is recorded as a coverage gap.
+- **Redirects are re-checked**, so a redirect cannot walk the crawler into a disallowed
+  path.
 - Only documented public endpoints are used. `jobagent sources list` shows what is read
   and, with reasons, what is deliberately not.
 
 ## Verification status
 
-240 tests, all offline, run with `pytest`.
+337 tests, all offline, run with `pytest`.
 
 **These have never run against a live endpoint.** The environment this was built in
 refuses every job-source host at its egress proxy, so the adapters are verified against

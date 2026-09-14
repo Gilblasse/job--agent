@@ -130,3 +130,24 @@ class TestClusteringIsOrderIndependent:
         first = set(cluster_postings(postings))
         second = set(cluster_postings(list(reversed(postings))))
         assert first == second
+
+
+class TestAuthorityCannotBeSpoofedBySubstring:
+    """Authority decides which link the user is sent to, so lookalikes must not pass."""
+
+    def test_a_lookalike_ats_host_is_not_official(self):
+        assert url_authority("https://greenhouse.io.evil.example/acme/jobs/1") \
+            is AuthorityTier.UNVERIFIED
+
+    def test_a_lookalike_employer_host_is_not_the_employer(self):
+        assert url_authority("https://evilacme.com/jobs/1", "acme.com") \
+            is AuthorityTier.UNVERIFIED
+
+    def test_a_real_subdomain_still_counts(self):
+        assert url_authority("https://careers.acme.com/jobs/1", "acme.com") \
+            is AuthorityTier.EMPLOYER_SITE
+        assert url_authority("https://boards.greenhouse.io/acme") is AuthorityTier.OFFICIAL_ATS
+
+    def test_the_bare_domain_still_counts(self):
+        assert url_authority("https://acme.com/jobs/1", "acme.com") \
+            is AuthorityTier.EMPLOYER_SITE

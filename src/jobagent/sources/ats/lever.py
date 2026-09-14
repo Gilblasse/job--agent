@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 
 from ...domain.models import RawPosting, SalaryRange, WorkplaceType
 from ...ports import Fetcher
-from .base import AtsAdapter, BoardTarget, ats_authority
+from .base import AtsAdapter, BoardTarget, ats_authority, require_ok
 
 API = "https://api.lever.co/v0/postings/{token}"
 
@@ -41,8 +41,7 @@ class LeverAdapter(AtsAdapter):
 
     def fetch_board(self, fetcher: Fetcher, target: BoardTarget) -> list[RawPosting]:
         response = fetcher.get(API.format(token=target.token), params={"mode": "json"})
-        if not response.ok:
-            return []
+        require_ok(response, f"lever board {target.token!r}")
         jobs = response.json()
         if not isinstance(jobs, list):
             return []

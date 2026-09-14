@@ -16,7 +16,7 @@ from datetime import date, datetime
 
 from ...domain.models import RawPosting
 from ...ports import Fetcher
-from .base import AtsAdapter, BoardTarget, ats_authority
+from .base import AtsAdapter, BoardTarget, ats_authority, require_ok
 
 API = "https://boards-api.greenhouse.io/v1/boards/{token}/jobs"
 
@@ -28,8 +28,7 @@ class GreenhouseAdapter(AtsAdapter):
 
     def fetch_board(self, fetcher: Fetcher, target: BoardTarget) -> list[RawPosting]:
         response = fetcher.get(API.format(token=target.token), params={"content": "true"})
-        if not response.ok:
-            return []
+        require_ok(response, f"greenhouse board {target.token!r}")
         payload = response.json() or {}
         jobs = payload.get("jobs") if isinstance(payload, dict) else None
         if not isinstance(jobs, list):

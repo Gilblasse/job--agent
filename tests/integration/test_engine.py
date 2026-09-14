@@ -313,3 +313,48 @@ class TestUserStatus:
 
         saved = seeded.results(search_id, statuses=["saved"], limit=50)
         assert [r["id"] for r in saved] == [job_id]
+
+
+class TestVerificationDoesNotTrustStatusAlone:
+    """Regression: a removed posting that redirects to the board root was marked LIVE.
+
+    Several ATS platforms answer a deleted listing with 200 at a different URL. Trusting
+    the status made filled roles look open indefinitely, which is the exact failure
+    verify.py exists to prevent.
+    """
+
+    def _job(self, seeded, fetcher):
+        spec = accounting_spec()
+        search_id = seeded.save_spec(spec.name, spec.to_yaml())
+        run_search(spec, seeded, fetcher, search_id=search_id, today=TODAY, now=NOW,
+                   only_sources=["greenhouse"])
+        return seeded.results(search_id, limit=5)[0]["id"]
+
+    def test_a_redirect_to_the_board_root_is_inconclusive(self, seeded, fetcher):
+        job_id = self._job(seeded, fetcher)
+
+        class Redirecting(FakeFetcher):
+            def get(self, url, *, params=None, headers=None):
+                response = super().get(url, params=params, headers=headers)
+                response.status = 200
+                response.url = "https://boards.greenhouse.io/acme"  # the board, not the job
+                return response
+
+        summary = verify_jobs(seeded, Redirecting(), [job_id], now=NOW)
+        assert summary.inconclusive == 1
+        assert summary.live == 0
+        assert seeded.get_job(job_id)["verification"] == "unverified"
+
+    def test_the_same_url_answering_200_is_live(self, seeded, fetcher):
+        job_id = self._job(seeded, fetcher)
+        url = seeded.get_job(job_id)["url"]
+
+        class SameUrl(FakeFetcher):
+            def get(self, inner, *, params=None, headers=None):
+                response = super().get(inner, params=params, headers=headers)
+                response.status = 200
+                response.url = url
+                return response
+
+        summary = verify_jobs(seeded, SameUrl(), [job_id], now=NOW)
+        assert summary.live == 1

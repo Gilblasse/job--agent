@@ -35,5 +35,4 @@ excluded_requirements:
 workplace: [remote]
 countries: [US]
 unverifiable_policy: flag
-max_results: 200
 source_budget: 400

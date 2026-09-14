@@ -65,7 +65,7 @@ class AtsAdapter(SourceAdapter):
             return DiscoveryResult(
                 report=self._report(
                     SourceStatus.SKIPPED, started=started,
-                    note="no registered boards for this platform",
+                    note="no registered boards — run: jobagent company seed",
                 )
             )
 
@@ -75,7 +75,9 @@ class AtsAdapter(SourceAdapter):
         failures = 0
         before = fetcher.requests_made
 
-        for target in targets[: request.budget]:
+        attempted = targets[: request.budget]
+        skipped_for_budget = len(targets) - len(attempted)
+        for target in attempted:
             if blocked:
                 outcomes.append(BoardOutcome(target, ok=False, failure_kind="host_blocked"))
                 continue
@@ -91,7 +93,10 @@ class AtsAdapter(SourceAdapter):
                     outcomes.append(BoardOutcome(target, ok=False, failure_kind=kind))
                 else:
                     failures += 1
-                    outcomes.append(BoardOutcome(target, ok=False, failure_kind="unavailable"))
+                    # 404 means the tenant is gone and should count against the board;
+                    # a 5xx is the server having a bad day and should not.
+                    kind = "gone" if error.status in (404, 410) else "unavailable"
+                    outcomes.append(BoardOutcome(target, ok=False, failure_kind=kind))
                 continue
             except Exception:  # noqa: BLE001 - a malformed board must not end the run
                 failures += 1
@@ -122,6 +127,13 @@ class AtsAdapter(SourceAdapter):
         else:
             status = SourceStatus.OK
             note = f"{boards(searched)} read"
+
+        if skipped_for_budget:
+            # Saying "200 boards read" while silently skipping 400 more overstates the
+            # coverage of the run.
+            note += (
+                f"; {skipped_for_budget} more not reached within this run's budget"
+            )
 
         result = DiscoveryResult(
             postings=dedupe_postings(postings),
@@ -174,6 +186,36 @@ class AtsAdapter(SourceAdapter):
             SourceStatus.UNAVAILABLE, requests=fetcher.requests_made - before, started=started,
             note="; ".join(errors) or "no probe tenants configured",
         )
+
+
+def require_ok(response: Any, what: str) -> Any:
+    """Raise unless the response actually succeeded.
+
+    Adapters used to treat any non-2xx as "this board has nothing open", which made a
+    dead tenant, a server error and a bad API key all look like a healthy, empty board.
+    The user saw "No matches" over a coverage table claiming every source was searched,
+    and the registry reset the board's failure count on each 404 so it was never evicted.
+
+    Status is mapped to a cause so the caller can tell "stop asking" from "try later":
+
+    - 401/403 -> blocked for this run; retrying a refusal is how a polite client stops
+      being one
+    - 404/410 -> this board is gone, and it counts against the board
+    - 5xx     -> the server is unwell; not the board's fault
+    """
+    status = getattr(response, "status", 0)
+    if 200 <= status < 300:
+        return response
+    if status in (401, 403):
+        raise FetchError(
+            f"{what}: HTTP {status} (refused; check credentials or access)",
+            blocked=True, status=status,
+        )
+    if status in (404, 410):
+        raise FetchError(f"{what}: HTTP {status} (board not found)", status=status)
+    if status == 429:
+        raise FetchError(f"{what}: HTTP 429 (rate limited)", blocked=True, status=429)
+    raise FetchError(f"{what}: HTTP {status}", status=status)
 
 
 def as_text(value: Any) -> str:

@@ -72,9 +72,18 @@ def url_authority(url: str, employer_domain: str | None = None) -> AuthorityTier
     if not url:
         return AuthorityTier.UNVERIFIED
     host = (urlsplit(url).hostname or "").lower()
-    if employer_domain and host.endswith(employer_domain.lower().lstrip(".")):
-        return AuthorityTier.EMPLOYER_SITE
-    if any(host.endswith(ats) or ats in host for ats in ATS_HOSTS):
+    if not host:
+        return AuthorityTier.UNVERIFIED
+
+    # Matched on domain boundaries, not substrings. `ats in host` promoted
+    # "greenhouse.io.evil.example" to OFFICIAL_ATS, and a bare endswith made
+    # "evilacme.com" an employer site for "acme.com". This decides which link the user is
+    # sent to, so it is the one place a lookalike host must not slip through.
+    if employer_domain:
+        domain = employer_domain.lower().strip().lstrip(".")
+        if domain and (host == domain or host.endswith(f".{domain}")):
+            return AuthorityTier.EMPLOYER_SITE
+    if any(host == ats or host.endswith(f".{ats}") for ats in ATS_HOSTS):
         return AuthorityTier.OFFICIAL_ATS
     return AuthorityTier.UNVERIFIED
 

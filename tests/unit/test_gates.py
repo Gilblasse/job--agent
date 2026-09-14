@@ -285,3 +285,100 @@ class TestSeniorityIsNotConfusedWithJobFamily:
         job = make_job(title=title)
         gate = SeniorityExcludeGate(levels=["management"])
         assert gate.evaluate(job, taxonomy, TODAY).outcome is GateOutcome.FAIL
+
+
+class TestSalaryFloorRespectsItsPeriod:
+    """Regression: the floor was compared against annualized pay without being annualized.
+
+    A user asking for "$30 an hour" had that 30 compared against ~$22,880, so an $11/hour
+    role passed by a factor of two thousand -- and the explanation asserted the pay rule
+    had been satisfied.
+    """
+
+    def test_an_hourly_floor_rejects_a_lower_hourly_rate(self, taxonomy):
+        from jobagent.domain.gates import SalaryFloorGate
+
+        job = make_job(description="Pay rate: $11.00 per hour.")
+        gate = SalaryFloorGate(minimum=30, period="hour")
+        assert gate.evaluate(job, taxonomy, TODAY).outcome is GateOutcome.FAIL
+
+    def test_an_hourly_floor_accepts_a_higher_hourly_rate(self, taxonomy):
+        from jobagent.domain.gates import SalaryFloorGate
+
+        job = make_job(description="Pay rate: $45.00 per hour.")
+        gate = SalaryFloorGate(minimum=30, period="hour")
+        assert gate.evaluate(job, taxonomy, TODAY).outcome is GateOutcome.PASS
+
+    def test_an_hourly_floor_compares_correctly_against_an_annual_salary(self, taxonomy):
+        from jobagent.domain.gates import SalaryFloorGate
+
+        job = make_job(description="Salary range: $40,000 - $45,000 per year.")
+        assert SalaryFloorGate(minimum=30, period="hour").evaluate(
+            job, taxonomy, TODAY
+        ).outcome is GateOutcome.FAIL
+        assert SalaryFloorGate(minimum=15, period="hour").evaluate(
+            job, taxonomy, TODAY
+        ).outcome is GateOutcome.PASS
+
+    def test_the_rule_text_states_both_figures(self, taxonomy):
+        from jobagent.domain.gates import SalaryFloorGate
+
+        job = make_job(description="Pay rate: $45.00 per hour.")
+        result = SalaryFloorGate(minimum=30, period="hour").evaluate(job, taxonomy, TODAY)
+        assert "30 per hour" in result.rule and "62,400/year" in result.rule
+
+
+class TestEmploymentTypeGate:
+    """Regression: the wizard collected employment types and nothing ever read them."""
+
+    def test_a_contract_role_fails_a_full_time_only_search(self, taxonomy):
+        from jobagent.domain.gates import EmploymentTypeGate
+
+        job = make_job(title="Accountant")
+        job.employment_type = "contract"
+        gate = EmploymentTypeGate(allowed=["full_time"])
+        assert gate.evaluate(job, taxonomy, TODAY).outcome is GateOutcome.FAIL
+
+    def test_a_full_time_role_passes(self, taxonomy):
+        from jobagent.domain.gates import EmploymentTypeGate
+
+        job = make_job(title="Accountant")
+        job.employment_type = "Full-time"
+        gate = EmploymentTypeGate(allowed=["full_time"])
+        assert gate.evaluate(job, taxonomy, TODAY).outcome is GateOutcome.PASS
+
+    def test_an_unstated_type_is_unverifiable(self, taxonomy):
+        from jobagent.domain.gates import EmploymentTypeGate
+
+        job = make_job(title="Accountant")
+        job.employment_type = None
+        gate = EmploymentTypeGate(allowed=["full_time"])
+        assert gate.evaluate(job, taxonomy, TODAY).outcome is GateOutcome.UNVERIFIABLE
+
+    def test_the_gate_is_compiled_from_the_spec(self):
+        """The bug was not in the gate but in it never being built."""
+        from jobagent.domain.spec import SearchSpec, compile_gates
+
+        spec = SearchSpec(name="t", employment_types=["full_time"], salary_min=30,
+                          salary_period="hour")
+        names = [g.name for g in compile_gates(spec)]
+        assert "employment_type" in names and "salary_floor" in names
+
+
+class TestCompoundSeniorityTitles:
+    """Regression: only the highest level named was reported, so the others escaped."""
+
+    @pytest.mark.parametrize(
+        "title", ["Senior Staff Accountant", "Senior Director of Finance",
+                  "Senior Principal Engineer"],
+    )
+    def test_excluding_senior_catches_a_compound_title(self, title, taxonomy):
+        job = make_job(title=title)
+        gate = SeniorityExcludeGate(levels=["senior"])
+        assert gate.evaluate(job, taxonomy, TODAY).outcome is GateOutcome.FAIL
+
+    def test_the_higher_level_is_still_caught_too(self, taxonomy):
+        job = make_job(title="Senior Staff Accountant")
+        assert SeniorityExcludeGate(levels=["staff"]).evaluate(
+            job, taxonomy, TODAY
+        ).outcome is GateOutcome.FAIL

@@ -11,6 +11,8 @@ import json
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 from jobagent.domain.models import AuthorityTier, SourceStatus, WorkplaceType
 from jobagent.ports import DiscoveryRequest
 from jobagent.sources.ats.ashby import AshbyAdapter
@@ -231,3 +233,143 @@ class TestDoctorGate:
         seed_registry(store)
         result = run_doctor(store, FakeFetcher(failures={"https://": unavailable()}))
         assert sum(result.registry_counts.values()) > 1000
+
+
+class TestHttpStatusIsNotSilentlySuccess:
+    """Regression: a non-2xx response was indistinguishable from an empty board.
+
+    404, 500 and 401 all produced `status: ok, found: 0, note: "3 boards read"`. The user
+    saw "No matches" over a coverage table claiming every source had been searched, and
+    the registry reset each board's failure count on every 404, so dead tenants were
+    never evicted.
+    """
+
+    def _request(self, fetcher, count=3):
+        return DiscoveryRequest(
+            fetcher=fetcher, budget=50,
+            targets=[BoardTarget(company=f"C{i}", token=f"t{i}") for i in range(count)],
+        )
+
+    @pytest.mark.parametrize(
+        "adapter",
+        [GreenhouseAdapter(), LeverAdapter(), AshbyAdapter()],
+        ids=["greenhouse", "lever", "ashby"],
+    )
+    @pytest.mark.parametrize("status", [404, 500, 502])
+    def test_error_statuses_are_reported_as_unavailable(self, adapter, status):
+        fetcher = FakeFetcher(default_status=status)
+        result = adapter.discover(self._request(fetcher))
+        assert result.report.status is SourceStatus.UNAVAILABLE, (
+            f"HTTP {status} reported as {result.report.status.value}"
+        )
+        assert result.postings == []
+
+    @pytest.mark.parametrize(
+        "adapter",
+        [GreenhouseAdapter(), LeverAdapter(), AshbyAdapter()],
+        ids=["greenhouse", "lever", "ashby"],
+    )
+    @pytest.mark.parametrize("status", [401, 403])
+    def test_refusals_block_the_host(self, adapter, status):
+        fetcher = FakeFetcher(default_status=status)
+        result = adapter.discover(self._request(fetcher))
+        assert result.report.status is SourceStatus.BLOCKED
+
+    def test_a_404_counts_against_the_board_but_a_500_does_not(self):
+        """Registry health must tell a removed tenant from a bad afternoon."""
+        gone = GreenhouseAdapter().discover(self._request(FakeFetcher(default_status=404)))
+        unwell = GreenhouseAdapter().discover(self._request(FakeFetcher(default_status=500)))
+        assert {o.failure_kind for o in gone.report.__dict__["outcomes"]} == {"gone"}
+        assert {o.failure_kind for o in unwell.report.__dict__["outcomes"]} == {"unavailable"}
+
+    def test_a_mistyped_usajobs_key_is_blocked_not_empty(self, monkeypatch):
+        """The likeliest real occurrence: a green, permanently empty source."""
+        monkeypatch.setenv("JOBAGENT_USAJOBS_KEY", "wrong")
+        monkeypatch.setenv("JOBAGENT_USAJOBS_EMAIL", "user@example.com")
+        fetcher = FakeFetcher(default_status=401)
+        result = UsaJobsAdapter(max_pages=1).discover(
+            DiscoveryRequest(terms=["analyst"], fetcher=fetcher)
+        )
+        assert result.report.status is SourceStatus.BLOCKED
+        assert "credentials" in result.report.note.lower()
+
+
+class TestWorkdayEnrichmentFailures:
+    def test_a_blocked_host_during_enrichment_is_not_swallowed(self):
+        """Regression: a bare except caught HostBlocked and reported the run healthy.
+
+        Descriptions are what the workplace, requirement and salary gates read, so
+        returning postings without them and calling the run OK presents degradation as
+        health.
+        """
+        from jobagent.ports import FetchError
+
+        fetcher = FakeFetcher(
+            routes={"/jobs#offset=0": fixture("workday_list")},
+            failures={"/job/": FetchError("rate limited", blocked=True, status=429)},
+        )
+        target = BoardTarget(company="Acme", token="acme", extra={"wd": "5", "site": "External"})
+        result = WorkdayAdapter(today=date(2026, 9, 14)).discover(
+            DiscoveryRequest(fetcher=fetcher, budget=5, targets=[target])
+        )
+        assert result.report.status is SourceStatus.BLOCKED
+
+    def test_a_missing_description_alone_does_not_fail_the_board(self):
+        from jobagent.ports import FetchError
+
+        fetcher = FakeFetcher(
+            routes={"/jobs#offset=0": fixture("workday_list")},
+            failures={"/job/": FetchError("connection reset")},
+        )
+        target = BoardTarget(company="Acme", token="acme", extra={"wd": "5", "site": "External"})
+        result = WorkdayAdapter(today=date(2026, 9, 14)).discover(
+            DiscoveryRequest(fetcher=fetcher, budget=5, targets=[target])
+        )
+        assert result.report.status is SourceStatus.OK
+        assert len(result.postings) == 2
+
+
+class TestUsaJobsWorkplaceIsNotGuessed:
+    def test_an_unstated_arrangement_stays_unknown(self, monkeypatch):
+        """Regression: the adapter asserted ONSITE, so remote searches rejected everything."""
+        monkeypatch.setenv("JOBAGENT_USAJOBS_KEY", "k")
+        monkeypatch.setenv("JOBAGENT_USAJOBS_EMAIL", "u@example.com")
+        payload = fixture("usajobs_search")
+        details = payload["SearchResult"]["SearchResultItems"][0]["MatchedObjectDescriptor"]
+        details["UserArea"]["Details"].pop("TeleworkEligible")
+
+        fetcher = FakeFetcher(routes={"data.usajobs.gov": payload})
+        result = UsaJobsAdapter(max_pages=1).discover(DiscoveryRequest(fetcher=fetcher))
+        assert result.postings[0].workplace_hint is WorkplaceType.UNKNOWN
+
+    def test_an_explicit_no_is_still_onsite(self, monkeypatch):
+        monkeypatch.setenv("JOBAGENT_USAJOBS_KEY", "k")
+        monkeypatch.setenv("JOBAGENT_USAJOBS_EMAIL", "u@example.com")
+        payload = fixture("usajobs_search")
+        details = payload["SearchResult"]["SearchResultItems"][0]["MatchedObjectDescriptor"]
+        details["UserArea"]["Details"]["TeleworkEligible"] = "false"
+
+        fetcher = FakeFetcher(routes={"data.usajobs.gov": payload})
+        result = UsaJobsAdapter(max_pages=1).discover(DiscoveryRequest(fetcher=fetcher))
+        assert result.postings[0].workplace_hint is WorkplaceType.ONSITE
+
+
+class TestRegistryUpsertReporting:
+    def test_reseeding_reports_existing_rows_as_existing(self):
+        """Regression: SQLite reports rowcount 1 for an upsert, so every row looked new."""
+        from jobagent.infra.store import Store
+        from jobagent.sources.registry import seed_registry
+
+        store = Store(":memory:")
+        first = seed_registry(store)
+        second = seed_registry(store)
+        assert first.added > 0 and first.existing == 0
+        assert second.added == 0
+        assert second.existing == first.added
+
+    def test_add_company_returns_false_for_an_update(self):
+        from jobagent.infra.store import Store
+
+        store = Store(":memory:")
+        assert store.add_company("Acme", "greenhouse", "acme") is True
+        assert store.add_company("Acme Corp", "greenhouse", "acme") is False

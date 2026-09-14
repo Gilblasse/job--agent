@@ -112,6 +112,7 @@ class DiscoveryRequest:
     fetcher: Fetcher | None = None
     budget: int = 100
     since: date | None = None
+    today: date | None = None  # injected so freshness logic is testable
     targets: list[Any] = field(default_factory=list)  # registry entries, for ATS fan-out
 
 

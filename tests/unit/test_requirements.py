@@ -115,3 +115,54 @@ class TestRequirementGate:
         result = RequirementGate(term="CPA").evaluate(job, taxonomy, TODAY)
         assert result.outcome is GateOutcome.FAIL
         assert "CPA required" in result.detail
+
+
+class TestCredentialQualifiersAreNotObligations:
+    """Regression: "active", "valid" and "licensed" were treated as requirement markers.
+
+    They are adjectives attached to the credential, so they always sit at distance zero
+    from it and won every proximity contest against a trailing "preferred" -- turning the
+    very common "Active CPA license preferred" into a rejection.
+    """
+
+    @pytest.mark.parametrize(
+        "text",
+        ["Active CPA license preferred.",
+         "The ideal candidate will have an active CPA license.",
+         "A valid CPA is a plus.",
+         "Licensed CPA preferred but not required."],
+    )
+    def test_a_qualified_credential_that_is_merely_preferred_is_kept(self, text, taxonomy):
+        assert classify_requirement(text, "CPA", taxonomy).context is RequirementContext.PREFERRED
+
+    @pytest.mark.parametrize(
+        "text", ["Active CPA license required.", "Must possess a current and valid CPA",
+                 "A valid CPA license is required."],
+    )
+    def test_a_qualified_credential_that_is_required_is_still_caught(self, text, taxonomy):
+        assert classify_requirement(text, "CPA", taxonomy).context is RequirementContext.REQUIRED
+
+
+class TestPluralCredentials:
+    """Regression: a trailing "s" made the credential invisible to the gate.
+
+    classify_requirement matched exactly while every other phrase gate matched
+    inflections, so "Licensed CPAs required" read as no mention of a CPA at all.
+    """
+
+    @pytest.mark.parametrize(
+        "text,term",
+        [("Licensed CPAs required to apply.", "CPA"),
+         ("Valid RN licenses required.", "RN license"),
+         ("Requirements: PMP certifications required.", "PMP certification"),
+         ("Series 7 licenses required.", "Series 7 license")],
+    )
+    def test_plural_forms_are_still_detected(self, text, term, taxonomy):
+        assert classify_requirement(text, term, taxonomy).context is RequirementContext.REQUIRED
+
+    def test_short_terms_do_not_start_matching_unrelated_words(self, taxonomy):
+        """Allowing a plural must not reintroduce the over-matching the guard prevents."""
+        from jobagent.domain.text import find_phrase
+
+        assert not find_phrase("please apply now", "AP", inflect=True)
+        assert not find_phrase("plush toys", "plus", inflect=True)

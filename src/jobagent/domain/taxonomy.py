@@ -62,9 +62,13 @@ DEFAULT_EMPLOYMENT_TYPES: dict[str, list[str]] = {
 DEFAULT_REQUIRED_MARKERS: list[str] = [
     "required", "requires", "require", "requirement", "must have", "must possess",
     "must hold", "must be", "mandatory", "is a must", "essential", "minimum qualification",
-    "minimum qualifications", "you must", "we require", "active", "current and valid",
-    "valid", "licensed",
+    "minimum qualifications", "you must", "we require",
 ]
+
+# Deliberately NOT obligation markers: "active", "valid", "licensed", "current".
+# They are adjectives attached to the credential, so they always sit at distance zero
+# from it and would win every proximity contest against a trailing "preferred" --
+# turning the very common "Active CPA license preferred" into a rejection.
 
 # Markers that say a qualification is welcome but optional.
 DEFAULT_PREFERRED_MARKERS: list[str] = [

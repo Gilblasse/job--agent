@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field, field_validator
 from .gates import (
     CompanyExcludeGate,
     CountryGate,
+    EmploymentTypeGate,
     FreshnessGate,
     Gate,
     LocationGate,
@@ -102,7 +103,6 @@ class SearchSpec(BaseModel):
     employment_types: list[str] = Field(default_factory=list)
 
     # --- level and pay ----------------------------------------------------------
-    seniority_include: list[str] = Field(default_factory=list)
     seniority_exclude: list[str] = Field(default_factory=list)
     salary_min: float | None = None
     salary_period: Literal["year", "month", "week", "day", "hour"] = "year"
@@ -118,14 +118,12 @@ class SearchSpec(BaseModel):
     shift_exclude: list[str] = Field(default_factory=list)
     needs_visa_sponsorship: bool = False
     exclude_security_clearance: bool = False
-    max_travel_percent: int | None = None
     deal_breakers: list[str] = Field(default_factory=list)
 
     # --- behaviour --------------------------------------------------------------
     max_age_days: int | None = None
     unverifiable_policy: Literal["flag", "strict"] = "flag"
     ranking: RankingWeights = Field(default_factory=RankingWeights)
-    max_results: int = 200
     source_budget: int = 400
 
     @field_validator("countries")
@@ -296,8 +294,17 @@ def compile_gates(spec: SearchSpec) -> list[Gate]:
             )
         )
 
+    if spec.employment_types:
+        gates.append(
+            EmploymentTypeGate(allowed=spec.employment_types, policy=default_policy)
+        )
+
     if spec.salary_min:
-        gates.append(SalaryFloorGate(minimum=spec.salary_min, policy=default_policy))
+        gates.append(
+            SalaryFloorGate(
+                minimum=spec.salary_min, period=spec.salary_period, policy=default_policy
+            )
+        )
 
     if spec.max_age_days:
         gates.append(FreshnessGate(max_age_days=spec.max_age_days, policy=default_policy))

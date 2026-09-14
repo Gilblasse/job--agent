@@ -166,3 +166,45 @@ class TestRelativeDates:
 
     def test_unparseable_text_yields_none(self):
         assert parse_relative_date("Recently", date(2026, 9, 14)) is None
+
+
+class TestSalaryIsNotInvented:
+    """Regression: any number near a currency symbol became a salary.
+
+    The harm ran both ways. A posting stating no pay but mentioning a stipend got an
+    invented salary and could then be REJECTED by a pay floor -- an unverifiable fact
+    causing a real rejection. A posting mentioning a large budget cleared any floor and
+    earned ranking points for it.
+    """
+
+    @pytest.mark.parametrize(
+        "text",
+        ["We offer a 401k match and a $25 lunch allowance.",
+         "Enjoy a $50 monthly wellness stipend.",
+         "Requires 5 years of experience. 401k plan available.",
+         "Competitive compensation and benefits.",
+         "Manage a team of 3 to 5 engineers.",
+         "Our 403b plan vests immediately."],
+    )
+    def test_perks_and_counts_are_not_read_as_pay(self, text):
+        assert parse_salary(text) is None
+
+    def test_a_stated_range_wins_over_an_unrelated_large_number(self):
+        salary = parse_salary(
+            "You will manage a $5,000,000 annual budget. Salary: $80,000-$95,000 per year."
+        )
+        assert (salary.minimum, salary.maximum) == (80_000.0, 95_000.0)
+
+    @pytest.mark.parametrize(
+        "text,low,high,period",
+        [("Salary range: $120,000 - $150,000 per year", 120_000, 150_000, "year"),
+         ("Compensation: $90k to $110k", 90_000, 110_000, "year"),
+         ("Pay range $22.00 - $28.00 per hour", 22, 28, "hour")],
+    )
+    def test_real_pay_disclosures_are_still_parsed(self, text, low, high, period):
+        salary = parse_salary(text)
+        assert (salary.minimum, salary.maximum, salary.period) == (low, high, period)
+
+    def test_a_single_figure_needs_a_pay_cue(self):
+        assert parse_salary("Base salary $85,000").minimum == 85_000.0
+        assert parse_salary("Suite $85,000 square feet of office") is None

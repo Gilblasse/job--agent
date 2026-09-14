@@ -75,9 +75,18 @@ class UsaJobsAdapter(SourceAdapter):
 
         for term in terms[:4]:
             for location in (request.locations or [""])[:3]:
+                # The run's budget is a cap on requests, not a suggestion. Without this
+                # a four-term, three-location search issued up to 48 requests whatever
+                # the caller asked for.
+                if fetcher.requests_made - before >= request.budget:
+                    failures.append("stopped at this run's request budget")
+                    break
                 try:
                     postings.extend(
-                        self._search(fetcher, key, email, term, location, request.since)
+                        self._search(
+                            fetcher, key, email, term, location, request.since,
+                            request.today or date.today(),
+                        )
                     )
                 except FetchError as error:
                     status, note = self.classify_failure(error)
@@ -104,7 +113,7 @@ class UsaJobsAdapter(SourceAdapter):
 
     def _search(
         self, fetcher: Fetcher, key: str, email: str, term: str, location: str,
-        since: date | None,
+        since: date | None, today: date,
     ) -> list[RawPosting]:
         postings: list[RawPosting] = []
         for page in range(1, self.max_pages + 1):
@@ -117,9 +126,18 @@ class UsaJobsAdapter(SourceAdapter):
             if location:
                 params["LocationName"] = location
             if since:
-                params["DatePosted"] = max(1, min(60, (date.today() - since).days))
+                params["DatePosted"] = max(1, min(60, (today - since).days))
 
             response = fetcher.get(API, params=params, headers=self._headers(key, email))
+            if response.status in (401, 403):
+                # Almost always a mistyped key, or a User-Agent that is not the address
+                # the key was registered to. Reporting this as "no results" would leave
+                # the user with a permanently green, permanently empty source.
+                raise FetchError(
+                    f"USAJOBS rejected the credentials (HTTP {response.status}); check "
+                    f"{KEY_ENV} and {EMAIL_ENV}",
+                    blocked=True, status=response.status,
+                )
             if not response.ok:
                 break
             payload = response.json() or {}
@@ -164,6 +182,11 @@ class UsaJobsAdapter(SourceAdapter):
             count = len(
                 (payload.get("SearchResult") or {}).get("SearchResultItems") or []
             )
+        elif response.status in (401, 403):
+            return self._report(
+                SourceStatus.BLOCKED, requests=fetcher.requests_made - before, started=started,
+                note=f"credentials rejected (HTTP {response.status}); check {KEY_ENV}/{EMAIL_ENV}",
+            )
         status = SourceStatus.OK if count else SourceStatus.UNAVAILABLE
         return self._report(
             status, found=count, requests=fetcher.requests_made - before, started=started,
@@ -196,8 +219,13 @@ def _to_posting(item: object, source: str) -> RawPosting | None:
         workplace = WorkplaceType.REMOTE
     elif telework in ("true", "yes"):
         workplace = WorkplaceType.HYBRID  # telework-eligible is not fully remote
-    else:
+    elif telework in ("false", "no") or remote in ("false", "no"):
         workplace = WorkplaceType.ONSITE
+    else:
+        # Neither field present. Guessing ONSITE here made a remote-only search hard
+        # reject every federal posting with a terse UserArea -- an adapter inventing a
+        # fact the posting never stated.
+        workplace = WorkplaceType.UNKNOWN
 
     apply_uris = d.get("ApplyURI") or []
     apply_url = apply_uris[0] if isinstance(apply_uris, list) and apply_uris else None
