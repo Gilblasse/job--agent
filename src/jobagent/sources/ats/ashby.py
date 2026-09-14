@@ -12,7 +12,7 @@ RobotsPolicy rather than special-cased here.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
 from ...domain.models import RawPosting, WorkplaceType
 from ...domain.normalize import parse_salary
@@ -34,7 +34,9 @@ class AshbyAdapter(AtsAdapter):
     name: str = "ashby"
     probe_tokens: tuple[str, ...] = ("linear", "ramp", "notion")
 
-    def fetch_board(self, fetcher: Fetcher, target: BoardTarget) -> list[RawPosting]:
+    def fetch_board(
+        self, fetcher: Fetcher, target: BoardTarget, today: date | None = None
+    ) -> list[RawPosting]:
         response = fetcher.get(
             API.format(token=target.token), params={"includeCompensation": "true"}
         )

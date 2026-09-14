@@ -11,7 +11,7 @@ Lever's own documentation is unusually explicit that this is public: published p
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from ...domain.models import RawPosting, SalaryRange, WorkplaceType
 from ...ports import Fetcher
@@ -39,7 +39,9 @@ class LeverAdapter(AtsAdapter):
     name: str = "lever"
     probe_tokens: tuple[str, ...] = ("netflix", "plaid", "spotify")
 
-    def fetch_board(self, fetcher: Fetcher, target: BoardTarget) -> list[RawPosting]:
+    def fetch_board(
+        self, fetcher: Fetcher, target: BoardTarget, today: date | None = None
+    ) -> list[RawPosting]:
         response = fetcher.get(API.format(token=target.token), params={"mode": "json"})
         require_ok(response, f"lever board {target.token!r}")
         jobs = response.json()

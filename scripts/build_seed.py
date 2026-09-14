@@ -71,14 +71,16 @@ def build(records: list[dict]) -> list[dict]:
                 "company": name,
                 "domain": domain_of(record.get("website")),
                 "ats": board.platform,
-                "token": board.token,
+                # Composite for platforms whose identity is more than a name, so two
+                # sites of one Workday tenant stay two boards.
+                "token": board.registry_token(),
                 "board_url": board.url,
                 "us_signal": us_signal,
                 "extra": board.extra,
             }
             # First write wins, except that a US signal always upgrades an existing row:
             # the same company can appear more than once with different metadata.
-            key = (board.platform, board.token)
+            key = board.key()
             if key in rows:
                 rows[key]["us_signal"] = rows[key]["us_signal"] or us_signal
             else:

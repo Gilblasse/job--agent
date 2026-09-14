@@ -406,6 +406,11 @@ class Store:
                        domain=COALESCE(excluded.domain, company_registry.domain),
                        board_url=CASE WHEN excluded.board_url != '' THEN excluded.board_url
                                       ELSE company_registry.board_url END,
+                       -- Refreshed when the incoming value is non-empty: notes carry
+                       -- routing metadata, and keeping a stale copy meant continuing to
+                       -- query an endpoint the employer had moved away from.
+                       notes=CASE WHEN excluded.notes != '' THEN excluded.notes
+                                  ELSE company_registry.notes END,
                        us_signal=MAX(excluded.us_signal, company_registry.us_signal)""",
                 (company, domain, ats, token, board_url, source, int(us_signal), now, notes),
             )

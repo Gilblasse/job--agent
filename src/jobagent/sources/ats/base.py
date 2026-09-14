@@ -9,6 +9,7 @@ size, and not wasting requests on boards that are dead or rate-limiting us.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 from ...domain.models import AuthorityTier, RawPosting, SourceReport, SourceStatus
@@ -47,7 +48,10 @@ class AtsAdapter(SourceAdapter):
 
     # -- subclass hooks -----------------------------------------------------------
 
-    def fetch_board(self, fetcher: Fetcher, target: BoardTarget) -> list[RawPosting]:
+    def fetch_board(
+        self, fetcher: Fetcher, target: BoardTarget, today: date | None = None
+    ) -> list[RawPosting]:
+        """Read one board. ``today`` is the run's date, for relative-date parsing."""
         raise NotImplementedError
 
     # -- the loop -----------------------------------------------------------------
@@ -82,7 +86,7 @@ class AtsAdapter(SourceAdapter):
                 outcomes.append(BoardOutcome(target, ok=False, failure_kind="host_blocked"))
                 continue
             try:
-                found = self.fetch_board(fetcher, target)
+                found = self.fetch_board(fetcher, target, request.today)
             except FetchError as error:
                 if error.blocked:
                     # The host has stopped serving us. Every remaining board on this

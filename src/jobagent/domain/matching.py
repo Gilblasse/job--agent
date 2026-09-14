@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from .gates import Gate, UnverifiablePolicy
+from .gates import Gate, SalaryFloorGate, UnverifiablePolicy
 from .models import (
     AuthorityTier,
     Decision,
@@ -119,11 +119,16 @@ def rank(
             Signal("pay disclosed", weights.salary_disclosed, _describe_salary(job))
         )
         if spec.salary_min:
-            low, high = job.salary.annualized()
-            best = high or low
-            if best and best >= spec.salary_min:
+            # The same comparison the gate makes: the annualized floor against the
+            # advertised MINIMUM. Using the raw spec figure, or the top of the range,
+            # let the ledger award "pay above floor" to a job the gate would not.
+            floor = SalaryFloorGate(
+                minimum=spec.salary_min, period=spec.salary_period
+            ).annual_floor()
+            low, _high = job.salary.annualized()
+            if low is not None and low >= floor:
                 signals.append(
-                    Signal("pay above floor", weights.salary_above_floor, f"{best:,.0f}")
+                    Signal("pay above floor", weights.salary_above_floor, f"{low:,.0f}/year")
                 )
 
     if job.posted_at is not None and weights.freshness:

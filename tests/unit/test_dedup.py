@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from jobagent.domain.dedup import (
     canonical_url,
     choose_canonical,
@@ -151,3 +153,36 @@ class TestAuthorityCannotBeSpoofedBySubstring:
     def test_the_bare_domain_still_counts(self):
         assert url_authority("https://acme.com/jobs/1", "acme.com") \
             is AuthorityTier.EMPLOYER_SITE
+
+
+class TestDiscoveryRejectsLookalikeHosts:
+    """A lookalike host must not register as an official ATS board.
+
+    `company add`, careers-page discovery and seed building all route through this, and
+    the result decides which link a user is sent to.
+    """
+
+    @pytest.mark.parametrize(
+        "url",
+        ["https://evilgreenhouse.io/acme",
+         "https://greenhouse.io.evil.example/acme",
+         "https://evilbamboohr.com/careers",
+         "https://notlever.co/acme",
+         "https://myworkdayjobs.com.evil.example/x"],
+    )
+    def test_lookalikes_are_rejected(self, url):
+        from jobagent.sources.discovery import extract_board
+
+        assert extract_board(url) is None
+
+    @pytest.mark.parametrize(
+        "url,platform",
+        [("https://boards.greenhouse.io/acme", "greenhouse"),
+         ("https://jobs.lever.co/acme", "lever"),
+         ("https://acme.bamboohr.com/careers", "bamboohr"),
+         ("https://acme.recruitee.com", "recruitee")],
+    )
+    def test_genuine_boards_still_resolve(self, url, platform):
+        from jobagent.sources.discovery import extract_board
+
+        assert extract_board(url).platform == platform

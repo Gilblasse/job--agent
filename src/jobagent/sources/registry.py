@@ -17,7 +17,7 @@ from typing import Any
 
 from ..infra.store import Store
 from ..sources.ats.base import BoardTarget
-from .discovery import extract_board
+from .discovery import extract_board, split_token
 
 SEED_PACKAGE = "jobagent.data"
 SEED_FILENAME = "companies.seed.json"
@@ -87,7 +87,7 @@ def add_from_url(
         return []
     name = company or board.token
     store.add_company(
-        company=name, ats=board.platform, token=board.token, board_url=url,
+        company=name, ats=board.platform, token=board.registry_token(), board_url=url,
         source="user", us_signal=us_signal,
         notes=json.dumps(board.extra) if board.extra else "",
     )
@@ -115,7 +115,7 @@ def import_csv(store: Store, path: Path) -> tuple[int, list[str]]:
                 if board is None:
                     problems.append(f"row {index}: no recognizable ATS board in {url!r}")
                     continue
-                ats, token = board.platform, board.token
+                ats, token = board.platform, board.registry_token()
                 extra = board.extra
             else:
                 extra = {}
@@ -145,21 +145,23 @@ def targets_for(
     rows = store.registry_targets(platforms=[platform], limit=limit, prefer_us=prefer_us)
     targets: list[BoardTarget] = []
     for row in rows:
-        extra: dict[str, str] = {}
+        # The stored token carries the tenancy for platforms that need it; split it back
+        # into the tenant plus its routing metadata before building a request.
+        token, extra = split_token(platform, row["token"])
         if row["notes"]:
             try:
                 loaded = json.loads(row["notes"])
                 if isinstance(loaded, dict):
-                    extra = {str(k): str(v) for k, v in loaded.items()}
+                    extra = {**{str(k): str(v) for k, v in loaded.items()}, **extra}
             except json.JSONDecodeError:
-                extra = {}
+                pass
         if search_text:
             # Workday supports real server-side search, so the query is pushed down
             # rather than pulling whole boards back to filter locally.
             extra["search_text"] = search_text
         targets.append(
             BoardTarget(
-                company=row["company"], token=row["token"], registry_id=int(row["id"]),
+                company=row["company"], token=token, registry_id=int(row["id"]),
                 board_url=row["board_url"], domain=row["domain"], extra=extra,
             )
         )

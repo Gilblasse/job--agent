@@ -471,13 +471,24 @@ class SalaryFloorGate(Gate):
             return self._pass(rule, detail="no salary floor configured")
         if job.salary is None:
             return self._unknown(rule, "posting advertises no pay")
+
         low, high = job.salary.annualized()
-        best = high or low
-        if best is None:
-            return self._unknown(rule, "pay range has no usable figure")
-        if best >= floor:
-            return self._pass(rule, evidence=f"{best:,.0f}/year")
-        return self._fail(rule, evidence=f"{best:,.0f}/year")
+        # A floor is a guarantee, so it is judged on what the employer promises AT LEAST.
+        # Comparing the top of the range let "$50k - $100k" clear an $80k floor even
+        # though the posting may pay $50k.
+        if low is None:
+            return self._unknown(
+                rule,
+                f"posting states only an upper figure ({high:,.0f}/year); "
+                "no guaranteed minimum to compare",
+            )
+
+        # Quote the posting's own wording next to the normalized figure: a bare
+        # "22,880/year" is a number this tool computed, not evidence from the posting.
+        stated = _describe_pay(job)
+        if low >= floor:
+            return self._pass(rule, evidence=stated, detail=f"minimum {low:,.0f}/year")
+        return self._fail(rule, evidence=stated, detail=f"minimum {low:,.0f}/year")
 
 
 @dataclass
@@ -592,3 +603,15 @@ def _normalize_employment(value: str, taxonomy: Taxonomy) -> str | None:
             if find_phrase(value, term):
                 return label
     return None
+
+
+def _describe_pay(job: Job) -> str:
+    """The pay as the posting states it, for use as gate evidence."""
+    salary = job.salary
+    if salary is None:
+        return ""
+    unit = f"{salary.currency}/{salary.period}"
+    if salary.minimum is not None and salary.maximum is not None:
+        return f"{salary.minimum:,.0f}-{salary.maximum:,.0f} {unit}"
+    value = salary.minimum if salary.minimum is not None else salary.maximum
+    return f"{value:,.0f} {unit}" if value is not None else ""

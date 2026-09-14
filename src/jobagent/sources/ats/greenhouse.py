@@ -26,7 +26,9 @@ class GreenhouseAdapter(AtsAdapter):
     name: str = "greenhouse"
     probe_tokens: tuple[str, ...] = ("stripe", "figma", "airbnb")
 
-    def fetch_board(self, fetcher: Fetcher, target: BoardTarget) -> list[RawPosting]:
+    def fetch_board(
+        self, fetcher: Fetcher, target: BoardTarget, today: date | None = None
+    ) -> list[RawPosting]:
         response = fetcher.get(API.format(token=target.token), params={"content": "true"})
         require_ok(response, f"greenhouse board {target.token!r}")
         payload = response.json() or {}

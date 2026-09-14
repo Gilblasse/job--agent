@@ -382,3 +382,45 @@ class TestCompoundSeniorityTitles:
         assert SeniorityExcludeGate(levels=["staff"]).evaluate(
             job, taxonomy, TODAY
         ).outcome is GateOutcome.FAIL
+
+
+class TestSalaryFloorJudgesTheMinimum:
+    """Regression: the floor was compared against the TOP of the advertised range.
+
+    A floor is a guarantee. Comparing the upper bound let "$50k - $100k" clear an $80k
+    floor even though the employer may pay $50k.
+    """
+
+    def test_a_range_straddling_the_floor_is_rejected(self, taxonomy):
+        from jobagent.domain.gates import SalaryFloorGate
+
+        job = make_job(description="Salary range: $50,000 - $100,000 per year.")
+        result = SalaryFloorGate(minimum=80_000).evaluate(job, taxonomy, TODAY)
+        assert result.outcome is GateOutcome.FAIL
+
+    def test_a_range_entirely_above_the_floor_passes(self, taxonomy):
+        from jobagent.domain.gates import SalaryFloorGate
+
+        job = make_job(description="Salary range: $90,000 - $120,000 per year.")
+        assert SalaryFloorGate(minimum=80_000).evaluate(
+            job, taxonomy, TODAY
+        ).outcome is GateOutcome.PASS
+
+    def test_evidence_quotes_the_posting_not_a_computed_number(self, taxonomy):
+        """A bare "22,880/year" is this tool's arithmetic, not evidence from the posting."""
+        from jobagent.domain.gates import SalaryFloorGate
+
+        job = make_job(description="Salary range: $50,000 - $100,000 per year.")
+        result = SalaryFloorGate(minimum=80_000).evaluate(job, taxonomy, TODAY)
+        assert "50,000-100,000" in result.evidence
+
+    def test_the_ranking_ledger_agrees_with_the_gate(self, taxonomy):
+        """The ledger must never award "pay above floor" to a job the gate rejects."""
+        from jobagent.domain.matching import evaluate
+        from jobagent.domain.spec import SearchSpec
+
+        spec = SearchSpec(name="t", salary_min=30, salary_period="hour",
+                          unverifiable_policy="flag")
+        job = make_job(description="Pay rate: $11.00 per hour.")
+        result = evaluate(job, spec, taxonomy, TODAY)
+        assert not any("above floor" in s.name for s in result.signals)

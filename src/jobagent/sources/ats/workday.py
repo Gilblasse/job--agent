@@ -66,8 +66,14 @@ class WorkdayAdapter(AtsAdapter):
             f"/wday/cxs/{target.token}/{site}"
         )
 
-    def fetch_board(self, fetcher: Fetcher, target: BoardTarget) -> list[RawPosting]:
+    def fetch_board(
+        self, fetcher: Fetcher, target: BoardTarget, today: date | None = None
+    ) -> list[RawPosting]:
         base = self._base(target)
+        # The run's date, threaded from DiscoveryRequest. Relative "Posted 5 Days Ago"
+        # values otherwise shift at a date boundary and freshness stops being
+        # deterministic unless a caller hand-builds the adapter.
+        as_of = today or self.today or date.today()
         # Workday accepts a single search string, so a multi-title spec pushes only its
         # first term down here; the rest are applied locally after retrieval.
         search_text = target.extra.get("search_text", "")
@@ -85,11 +91,16 @@ class WorkdayAdapter(AtsAdapter):
                 },
             )
             if page == 0:
-                # Only the first page proves the board exists; a later page failing just
-                # ends pagination.
                 require_ok(response, f"workday board {target.token!r}")
             elif not response.ok:
-                break
+                # A later page failing is not end-of-results either. For a board with
+                # more than 20 postings this returned page one and reported the board
+                # healthy, presenting partial discovery as full coverage.
+                raise FetchError(
+                    f"workday board {target.token!r}: HTTP {response.status} on page "
+                    f"{page + 1} of pagination",
+                    status=response.status,
+                )
             payload = response.json() or {}
             listings = payload.get("jobPostings") if isinstance(payload, dict) else None
             if not isinstance(listings, list) or not listings:
@@ -100,17 +111,24 @@ class WorkdayAdapter(AtsAdapter):
                     continue
                 path = str(item.get("externalPath") or "")
                 public_url = _public_url(target, path)
+                requisition = path.rsplit("/", 1)[-1] or path
                 postings.append(
                     RawPosting(
                         source=self.name,
-                        external_id=path.rsplit("/", 1)[-1] or path,
+                        # Namespaced by tenancy. A bare "R-1" is unique only within one
+                        # tenant and site, and this value is used both for within-source
+                        # deduplication and for cross-board clustering -- so two
+                        # employers sharing a tail could drop a posting or, worse, merge
+                        # two unrelated jobs into one record.
+                        external_id=(
+                            f"{target.token}:{target.extra.get('wd', '5')}:"
+                            f"{target.extra.get('site', 'External')}:{requisition}"
+                        ),
                         title=str(item.get("title") or ""),
                         company=target.company,
                         url=public_url,
                         location_raw=str(item.get("locationsText") or ""),
-                        posted_at=parse_relative_date(
-                            str(item.get("postedOn") or ""), self.today or date.today()
-                        ),
+                        posted_at=parse_relative_date(str(item.get("postedOn") or ""), as_of),
                         authority=ats_authority(public_url, target.domain),
                     )
                 )

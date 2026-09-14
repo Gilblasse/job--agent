@@ -373,3 +373,82 @@ class TestRegistryUpsertReporting:
         store = Store(":memory:")
         assert store.add_company("Acme", "greenhouse", "acme") is True
         assert store.add_company("Acme Corp", "greenhouse", "acme") is False
+
+
+class TestWorkdayIdentityIsNamespaced:
+    """Regression: a Workday requisition id is unique only within a tenant and site.
+
+    The bare tail ("R-1") was used both for within-source deduplication and for
+    cross-board clustering, so two employers sharing one could drop a posting or merge
+    two unrelated jobs into a single record.
+    """
+
+    def _board(self, token: str, wd: str, site: str, details: bool = True):
+        fetcher = FakeFetcher(routes={
+            "/jobs#offset=0": fixture("workday_list"),
+            "Project-Manager_R-1": fixture("workday_detail_1"),
+            "AP-Clerk_R-2": fixture("workday_detail_2"),
+        })
+        target = BoardTarget(company=token, token=token, extra={"wd": wd, "site": site})
+        adapter = WorkdayAdapter(today=date(2026, 9, 14), max_details=20 if details else 0)
+        return adapter.fetch_board(fetcher, target)
+
+    def test_two_tenants_sharing_a_requisition_id_stay_distinct(self):
+        # Enrichment is off here so the test isolates the id. The shared fixture hands
+        # both boards the same externalUrl, which the clusterer correctly treats as one
+        # job -- true of the fixture, not of two real employers.
+        first = self._board("acme", "5", "External", details=False)
+        second = self._board("globex", "1", "Careers", details=False)
+        assert first[0].external_id != second[0].external_id
+
+        from jobagent.domain.dedup import cluster_postings
+
+        assert len(cluster_postings(first + second)) == 4
+
+    def test_the_id_carries_the_tenancy(self):
+        posting = self._board("acme", "5", "External")[0]
+        assert posting.external_id.startswith("acme:5:External:")
+
+    def test_two_sites_of_one_tenant_are_two_boards(self):
+        """One careers page can link to several sites; keying on the tenant lost all but one."""
+        from jobagent.sources.discovery import extract_board
+
+        a = extract_board("https://acme.wd5.myworkdayjobs.com/en-US/External")
+        b = extract_board("https://acme.wd5.myworkdayjobs.com/en-US/Campus")
+        assert a.key() != b.key()
+
+    def test_the_run_date_reaches_the_adapter(self):
+        """Relative dates otherwise shift at a date boundary."""
+        fetcher = FakeFetcher(routes={"/jobs#offset=0": fixture("workday_list")})
+        target = BoardTarget(company="Acme", token="acme", extra={"wd": "5", "site": "External"})
+        result = WorkdayAdapter().discover(
+            DiscoveryRequest(fetcher=fetcher, budget=5, targets=[target],
+                             today=date(2026, 9, 14))
+        )
+        assert result.postings[0].posted_at == date(2026, 9, 9)
+
+
+class TestPaginationFailuresAreNotEndOfResults:
+    def test_a_workday_page_two_failure_is_reported(self):
+        """Regression: a board with >20 postings returned page one and reported OK."""
+        full_page = {"total": 40, "jobPostings": [
+            {"title": f"Role {i}", "externalPath": f"/job/X/Role_{i}",
+             "locationsText": "Dallas, TX", "postedOn": "Posted 1 Day Ago"}
+            for i in range(20)
+        ]}
+        fetcher = FakeFetcher(routes={"/jobs#offset=0": full_page}, default_status=500)
+        target = BoardTarget(company="Acme", token="acme", extra={"wd": "5", "site": "External"})
+        result = WorkdayAdapter(today=date(2026, 9, 14), max_details=0).discover(
+            DiscoveryRequest(fetcher=fetcher, budget=5, targets=[target])
+        )
+        assert result.report.status is not SourceStatus.OK
+
+    def test_a_usajobs_first_page_failure_is_not_a_healthy_empty_search(self, monkeypatch):
+        monkeypatch.setenv("JOBAGENT_USAJOBS_KEY", "k")
+        monkeypatch.setenv("JOBAGENT_USAJOBS_EMAIL", "u@example.com")
+        fetcher = FakeFetcher(default_status=500)
+        result = UsaJobsAdapter(max_pages=2).discover(
+            DiscoveryRequest(terms=["analyst"], fetcher=fetcher, budget=10)
+        )
+        assert result.report.status is not SourceStatus.OK
+        assert result.postings == []

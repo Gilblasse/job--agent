@@ -36,6 +36,15 @@ class HostBlocked(FetchError):
     """This host has stopped serving us for the rest of this run."""
 
 
+class _Unreachable:
+    """Marker: robots.txt could not be read at all.
+
+    Distinct from None, which means the host published no robots.txt and access is
+    therefore permitted. Not being able to READ the policy is not the same as there being
+    no policy, so this one fails closed.
+    """
+
+
 @dataclass
 class _HostState:
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -57,7 +66,9 @@ class RobotsPolicy:
         self._client = client
         self._enabled = enabled
         self._pace = pace
-        self._cache: dict[str, urllib.robotparser.RobotFileParser | None] = {}
+        self._cache: dict[
+            str, urllib.robotparser.RobotFileParser | _Unreachable | None
+        ] = {}
         # One lock per origin rather than one global lock: holding a single lock across
         # the robots fetch serialized the first request to EVERY host behind the first.
         self._locks: dict[str, threading.Lock] = {}
@@ -76,19 +87,25 @@ class RobotsPolicy:
                 self._cache[origin] = self._load(origin)
             parser = self._cache[origin]
 
+        if isinstance(parser, _Unreachable):
+            # Fail closed. A tool that crawls whenever it cannot check the rules is not
+            # respecting them; it is respecting them only when checking happens to work.
+            return False, "robots.txt could not be fetched, so access is not confirmed"
         if parser is None:
             return True, "no robots.txt published"
         allowed = parser.can_fetch(user_agent, url)
         return allowed, "allowed by robots.txt" if allowed else "disallowed by robots.txt"
 
-    def _load(self, origin: str) -> urllib.robotparser.RobotFileParser | None:
+    def _load(
+        self, origin: str
+    ) -> urllib.robotparser.RobotFileParser | _Unreachable | None:
         parser = urllib.robotparser.RobotFileParser()
         try:
             if self._pace is not None:
                 self._pace(origin)
             response = self._client.get(f"{origin}/robots.txt", timeout=10.0)
         except httpx.HTTPError:
-            return None  # unreachable robots is treated as absent, not as a prohibition
+            return _Unreachable()  # cannot read the policy; see allows()
         if response.status_code >= 500:
             parser.parse(["User-agent: *", "Disallow: /"])
             return parser
@@ -189,21 +206,7 @@ class HttpFetcher:
             raise HostBlocked(f"{host}: {note}", blocked=True)
 
         response = self._send(method, url, state, params=params, json=json, headers=headers)
-
-        # A redirect can land on a different host, or on a path the origin disallows.
-        # Checking only the URL we asked for would let a redirect walk us past robots.
-        final = str(response.url)
-        if final != url:
-            allowed, note = self.robots.allows(final, self.user_agent)
-            if not allowed:
-                self._state(urlsplit(final).netloc).blocked_reason = note
-                raise HostBlocked(f"redirected to a disallowed location: {final}", blocked=True)
-
-        # 403 is a refusal, not a hiccup. Retrying it is how a polite client turns into
-        # an impolite one, so the host is set aside for the rest of the run.
-        if response.status_code == 403:
-            state.blocked_reason = "host returned 403"
-            raise HostBlocked(f"{host} returned 403", blocked=True, status=403)
+        self._enforce(url, response, state, host)
 
         if response.status_code == 429:
             retry_after = _parse_retry_after(response.headers.get("retry-after"))
@@ -218,6 +221,10 @@ class HttpFetcher:
                 response = self._send(
                     method, url, state, params=params, json=json, headers=headers
                 )
+                # The retry gets the SAME checks as the first attempt. Returning it
+                # directly let a 429-then-redirect, or a 429-then-403, come back as an
+                # ordinary response with none of the protections applied.
+                self._enforce(url, response, state, host)
                 if response.status_code != 429:
                     return _to_response(url, response)
             # One considered wait, then stop. Per run only -- a shared host that
@@ -226,6 +233,23 @@ class HttpFetcher:
             raise HostBlocked(f"{host} rate limited", blocked=True, status=429)
 
         return _to_response(url, response)
+
+    def _enforce(self, url: str, response: httpx.Response, state: _HostState, host: str) -> None:
+        """Apply the post-response policy. Raises rather than returning a verdict."""
+        # A redirect can land on a different host, or on a path the origin disallows.
+        # Checking only the URL we asked for would let a redirect walk us past robots.
+        final = str(response.url)
+        if final != url:
+            allowed, note = self.robots.allows(final, self.user_agent)
+            if not allowed:
+                self._state(urlsplit(final).netloc).blocked_reason = note
+                raise HostBlocked(f"redirected to a disallowed location: {final}", blocked=True)
+
+        # 403 is a refusal, not a hiccup. Retrying it is how a polite client turns into
+        # an impolite one, so the host is set aside for the rest of the run.
+        if response.status_code == 403:
+            state.blocked_reason = "host returned 403"
+            raise HostBlocked(f"{host} returned 403", blocked=True, status=403)
 
     def _send(
         self, method: str, url: str, state: _HostState, *,

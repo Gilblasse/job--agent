@@ -16,7 +16,7 @@ otherwise inexplicable authentication failures.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 
 from ..domain.models import (
@@ -44,6 +44,7 @@ class UsaJobsAdapter(SourceAdapter):
     name: str = "usajobs"
     results_per_page: int = 50
     max_pages: int = 4
+    _page_notes: list[str] = field(default_factory=list)
 
     def credentials(self) -> tuple[str, str] | None:
         key, email = os.environ.get(KEY_ENV, ""), os.environ.get(EMAIL_ENV, "")
@@ -139,6 +140,15 @@ class UsaJobsAdapter(SourceAdapter):
                     blocked=True, status=response.status,
                 )
             if not response.ok:
+                if page == 1:
+                    # A failure on the FIRST page is not end-of-results; leaving it here
+                    # made an outage or a dead endpoint look like a healthy, empty
+                    # federal search.
+                    raise FetchError(
+                        f"USAJOBS returned HTTP {response.status}", status=response.status
+                    )
+                failures_note = f"stopped after page {page - 1}: HTTP {response.status}"
+                self._page_notes.append(failures_note)
                 break
             payload = response.json() or {}
             result = payload.get("SearchResult", {}) if isinstance(payload, dict) else {}

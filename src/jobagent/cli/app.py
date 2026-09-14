@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 from pathlib import Path
 
@@ -492,11 +493,14 @@ def company_add(
         console.print("[red]No ATS board found on that page.[/red]")
         raise typer.Exit(1)
     for board in boards:
+        # Persist the routing metadata too. Dropping it sent Workday boards to the
+        # default wd5/External endpoint, where they returned nothing and looked empty.
         store.add_company(
-            company=name or board.token, ats=board.platform, token=board.token,
+            company=name or board.token, ats=board.platform, token=board.registry_token(),
             board_url=board.url, source="careers-page", us_signal=True,
+            notes=json.dumps(board.extra) if board.extra else "",
         )
-        console.print(f"[green]Registered {board.platform}:{board.token}[/green]")
+        console.print(f"[green]Registered {board.platform}:{board.registry_token()}[/green]")
 
 
 @company_app.command("import")

@@ -102,8 +102,21 @@ class TestRobotsPolicy:
             fetcher.get("https://example.com/api/jobs")
         assert caught.value.blocked
 
-    def test_an_unreachable_robots_is_treated_as_absent(self):
+    def test_an_unreadable_robots_fails_closed(self):
+        """Not being able to read the policy is not the same as there being no policy.
+
+        This previously cached a transport failure as "no robots.txt" and permitted the
+        request, so a transient network error let the tool crawl a source whose rules it
+        had never seen.
+        """
         policy = RobotsPolicy(StubClient(raise_for="robots"), enabled=True)
+        allowed, note = policy.allows("https://example.com/api/jobs")
+        assert not allowed
+        assert "could not be fetched" in note
+
+    def test_a_published_empty_robots_still_permits(self):
+        """Distinguished from the above: a host that publishes no rules allows access."""
+        policy = RobotsPolicy(StubClient({"/robots.txt": (404, "", {})}), enabled=True)
         allowed, note = policy.allows("https://example.com/api/jobs")
         assert allowed and "no robots.txt" in note
 
@@ -299,3 +312,67 @@ class TestRedirectsAreRechecked:
             fetcher.get("https://example.com/api/jobs")
         assert caught.value.blocked
         assert "disallowed" in str(caught.value)
+
+
+class TestTheRetryGetsTheSameChecks:
+    """Regression: the 429 retry returned early, skipping redirect and 403 handling.
+
+    A 429 followed by a redirect into a disallowed path, or by a 403, came back as an
+    ordinary response with none of the protections the first attempt got.
+    """
+
+    def test_a_429_then_403_is_still_blocked(self):
+        statuses = iter([429, 403])
+        client = StubClient({**ALLOW_ALL, "/api": (429, "", {"retry-after": "0"})})
+        original = client._response
+
+        def sequenced(method: str, url: str):
+            response = original(method, url)
+            if "/api" in url:
+                response.status_code = next(statuses, 403)
+            return response
+
+        client._response = sequenced
+        fetcher = HttpFetcher(min_interval=0.0, client=client)
+        with pytest.raises(FetchError) as caught:
+            fetcher.get("https://example.com/api")
+        assert caught.value.blocked
+        assert caught.value.status == 403
+
+    def test_a_429_then_a_disallowed_redirect_is_still_blocked(self):
+        statuses = iter([429, 200])
+        client = StubClient({
+            "/robots.txt": (200, "User-agent: *\nDisallow: /private/", {}),
+            "/api": (429, "", {"retry-after": "0"}),
+        })
+        original = client._response
+
+        def sequenced(method: str, url: str):
+            response = original(method, url)
+            if "/api" in url:
+                code = next(statuses, 200)
+                response.status_code = code
+                if code == 200:
+                    response.request = httpx.Request(method, "https://example.com/private/x")
+            return response
+
+        client._response = sequenced
+        fetcher = HttpFetcher(min_interval=0.0, client=client)
+        with pytest.raises(FetchError) as caught:
+            fetcher.get("https://example.com/api")
+        assert "disallowed" in str(caught.value)
+
+    def test_a_429_then_success_still_returns_the_response(self):
+        statuses = iter([429, 200])
+        client = StubClient({**ALLOW_ALL, "/api": (429, '{"ok":true}', {"retry-after": "0"})})
+        original = client._response
+
+        def sequenced(method: str, url: str):
+            response = original(method, url)
+            if "/api" in url:
+                response.status_code = next(statuses, 200)
+            return response
+
+        client._response = sequenced
+        fetcher = HttpFetcher(min_interval=0.0, client=client)
+        assert fetcher.get("https://example.com/api").ok

@@ -34,11 +34,46 @@ class BoardRef:
     extra: dict[str, str] = field(default_factory=dict)
 
     def key(self) -> tuple[str, str]:
-        return (self.platform, self.token)
+        return (self.platform, self.registry_token())
+
+    def registry_token(self) -> str:
+        """The token as the registry stores it.
+
+        Workday tenancy is a (tenant, instance, site) triple, and one careers page can
+        link to several sites for the same tenant. Keying on the tenant alone dropped all
+        but one of them, and the registry's UNIQUE(ats, token) collided the same way.
+        """
+        return compose_token(self.platform, self.token, self.extra)
+
+
+def compose_token(platform: str, token: str, extra: dict[str, str] | None) -> str:
+    if platform != "workday":
+        return token
+    extra = extra or {}
+    return f"{token}:{extra.get('wd', '5')}:{extra.get('site', 'External')}"
+
+
+def split_token(platform: str, token: str) -> tuple[str, dict[str, str]]:
+    """Inverse of ``compose_token``: recover the tenant and its routing metadata."""
+    if platform == "workday":
+        parts = token.split(":")
+        if len(parts) == 3:
+            return parts[0], {"wd": parts[1], "site": parts[2]}
+    return token, {}
 
 
 def _clean(token: str) -> str:
     return token.strip().strip("/").split("?")[0].split("#")[0]
+
+
+def _is_host(host: str, domain: str) -> bool:
+    """Match a vendor domain on a dot boundary, not as a substring.
+
+    ``host.endswith("greenhouse.io")`` is true for "evilgreenhouse.io", which would let
+    an unrelated domain register as an official ATS board and become the link a user is
+    sent to.
+    """
+    return host == domain or host.endswith(f".{domain}")
 
 
 _WORKDAY = re.compile(
@@ -80,7 +115,7 @@ def extract_board(url: str) -> BoardRef | None:
             )
         return None
 
-    if host.endswith("greenhouse.io"):
+    if _is_host(host, "greenhouse.io"):
         if first and first not in RESERVED:
             return BoardRef("greenhouse", first, url)
         subdomain = host.split(".")[0]
@@ -88,37 +123,38 @@ def extract_board(url: str) -> BoardRef | None:
             return BoardRef("greenhouse", subdomain, url)
         return None
 
-    if host.endswith("lever.co"):
+    if _is_host(host, "lever.co"):
         return BoardRef("lever", first, url) if first and first not in RESERVED else None
 
-    if host.endswith("ashbyhq.com"):
+    if _is_host(host, "ashbyhq.com"):
         if first and first not in RESERVED:
             return BoardRef("ashby", first, url)
         subdomain = host.split(".")[0]
         return BoardRef("ashby", subdomain, url) if subdomain not in {"jobs", "api"} else None
 
-    if host.endswith("smartrecruiters.com"):
+    if _is_host(host, "smartrecruiters.com"):
         return (
             BoardRef("smartrecruiters", first_raw, url)
             if first and first not in RESERVED
             else None
         )
 
-    if host.endswith("workable.com"):
+    if _is_host(host, "workable.com"):
         return BoardRef("workable", first, url) if first and first not in RESERVED else None
 
-    for suffix, platform in (
-        (".recruitee.com", "recruitee"),
-        (".bamboohr.com", "bamboohr"),
-        (".breezy.hr", "breezy"),
-        (".applytojob.com", "jazzhr"),
-        (".teamtailor.com", "teamtailor"),
+    for domain, platform in (
+        ("recruitee.com", "recruitee"),
+        ("bamboohr.com", "bamboohr"),
+        ("breezy.hr", "breezy"),
+        ("applytojob.com", "jazzhr"),
+        ("teamtailor.com", "teamtailor"),
     ):
-        if host.endswith(suffix):
-            token = host[: -len(suffix)]
-            return BoardRef(platform, token, url) if token else None
+        # A tenant subdomain specifically, so "evilbamboohr.com" does not qualify.
+        if host.endswith(f".{domain}"):
+            token = host[: -len(domain) - 1]
+            return BoardRef(platform, token, url) if token and "." not in token else None
 
-    if ".jobs.personio." in host:
+    if host.endswith((".jobs.personio.de", ".jobs.personio.com")):
         return BoardRef("personio", host.split(".")[0], url)
 
     return None

@@ -39,7 +39,14 @@ log "jobagent live validation"
 log "date:      $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 log "database:  $DB"
 log "version:   $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-log "usajobs:   ${JOBAGENT_USAJOBS_KEY:+configured}${JOBAGENT_USAJOBS_KEY:-NOT CONFIGURED}"
+# Only whether it is set, never the value: ${VAR:-default} expands to the VALUE when the
+# variable is set, so the previous form wrote the API key straight into this report -- a
+# file that is saved to disk and meant to be pasted back.
+if [ -n "${JOBAGENT_USAJOBS_KEY:-}" ]; then
+  log "usajobs:   configured"
+else
+  log "usajobs:   NOT CONFIGURED"
+fi
 
 run jobagent company seed --db "$DB"
 
