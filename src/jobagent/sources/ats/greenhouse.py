@@ -12,7 +12,7 @@ postings rather than guessing.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
 from ...domain.models import RawPosting
 from ...ports import Fetcher
@@ -72,7 +72,7 @@ class GreenhouseAdapter(AtsAdapter):
         return postings
 
 
-def _parse_date(value: object) -> datetime.date | None:  # type: ignore[name-defined]
+def _parse_date(value: object) -> date | None:
     if not isinstance(value, str) or not value:
         return None
     try:

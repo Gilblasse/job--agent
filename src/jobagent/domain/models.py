@@ -289,17 +289,12 @@ class MatchResult:
 
 @dataclass
 class SourceReport:
-    """What happened with one source during one run.
-
-    ``skipped_cached`` distinguishes "nothing changed since last run" from "found
-    nothing", which otherwise look identical in a coverage table.
-    """
+    """What happened with one source during one run."""
 
     source: str
     status: SourceStatus
     found: int = 0
     requests: int = 0
-    skipped_cached: int = 0
     duration_ms: int = 0
     note: str = ""
 

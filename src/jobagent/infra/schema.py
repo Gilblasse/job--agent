@@ -41,7 +41,6 @@ MIGRATIONS: list[tuple[int, str]] = [
             status         TEXT NOT NULL,
             found          INTEGER NOT NULL DEFAULT 0,
             requests       INTEGER NOT NULL DEFAULT 0,
-            skipped_cached INTEGER NOT NULL DEFAULT 0,
             duration_ms    INTEGER NOT NULL DEFAULT 0,
             note           TEXT NOT NULL DEFAULT ''
         );
@@ -146,15 +145,6 @@ MIGRATIONS: list[tuple[int, str]] = [
         CREATE INDEX idx_registry_ats ON company_registry(ats);
         CREATE INDEX idx_registry_us ON company_registry(us_signal DESC, consecutive_failures ASC);
 
-        -- Conditional-request records, so a repeat run can skip unchanged boards
-        -- instead of re-downloading thousands of them.
-        CREATE TABLE fetch_cache (
-            url           TEXT PRIMARY KEY,
-            etag          TEXT,
-            last_modified TEXT,
-            fetched_at    TEXT NOT NULL,
-            content_hash  TEXT NOT NULL DEFAULT ''
-        );
         """,
     ),
 ]

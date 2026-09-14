@@ -13,6 +13,10 @@ never asked for it.
 The budget is spent where it is most likely to pay. Fan-out ordering favours boards with
 a US signal and a recent success, because with thousands of registered boards and a
 finite budget, ordering *is* the search strategy.
+
+There is no response caching. Conditional requests would cut bandwidth on repeat runs,
+but returning a cached body means storing every board body, and that is not built. A run
+re-fetches.
 """
 
 from __future__ import annotations
@@ -46,7 +50,8 @@ def allocate(spec: SearchSpec, store: Store, platforms: list[str]) -> dict[str, 
     Proportional rather than equal: giving a platform with 600 boards the same slice as
     one with 140 wastes budget on the smaller and starves the larger.
     """
-    counts = {p: store.registry_counts().get(p, 0) for p in platforms}
+    available = store.registry_counts()
+    counts = {p: available.get(p, 0) for p in platforms}
     total = sum(counts.values())
     if not total:
         return dict.fromkeys(platforms, 0)

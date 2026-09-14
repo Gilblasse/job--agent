@@ -42,14 +42,13 @@ class SourceAdapter:
 
     def _report(
         self, status: SourceStatus, *, found: int = 0, requests: int = 0,
-        started: float = 0.0, note: str = "", skipped: int = 0,
+        started: float = 0.0, note: str = "",
     ) -> SourceReport:
         return SourceReport(
             source=self.name,
             status=status,
             found=found,
             requests=requests,
-            skipped_cached=skipped,
             duration_ms=int((time.monotonic() - started) * 1000) if started else 0,
             note=note,
         )

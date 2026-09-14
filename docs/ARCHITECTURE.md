@@ -140,6 +140,10 @@ what the onsite-metro case needs — so a budget, not zero. — `sources/ats/wor
 "audit"; words under five characters are left alone so "plus" does not start matching
 "plush". — `domain/text.py`
 
+**There is no response caching.** Conditional requests would cut bandwidth noticeably on
+repeat fan-outs, but honouring a 304 means storing every board body, which is not built.
+A run re-fetches. This is the most obvious efficiency work left. — `engine/planning.py`
+
 ## Evolving beyond one machine
 
 Version 1 is local-first and free, and stays that way. The seams for anything larger are

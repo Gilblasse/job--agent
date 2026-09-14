@@ -80,19 +80,17 @@ class Store:
     def save_spec(self, name: str, spec_yaml: str) -> int:
         now = datetime.now().isoformat()
         with self.conn:
-            cursor = self.conn.execute(
+            self.conn.execute(
                 """INSERT INTO searches (name, spec_yaml, created_at, updated_at)
                    VALUES (?, ?, ?, ?)
                    ON CONFLICT(name) DO UPDATE SET spec_yaml=excluded.spec_yaml,
                                                    updated_at=excluded.updated_at""",
                 (name, spec_yaml, now, now),
             )
-        if cursor.lastrowid:
-            row = self.conn.execute("SELECT id FROM searches WHERE name = ?", (name,)).fetchone()
-            return int(row["id"])
-        return int(
-            self.conn.execute("SELECT id FROM searches WHERE name = ?", (name,)).fetchone()["id"]
-        )
+        # Read the id back rather than trusting lastrowid, which is not meaningful after
+        # an upsert that took the UPDATE branch.
+        row = self.conn.execute("SELECT id FROM searches WHERE name = ?", (name,)).fetchone()
+        return int(row["id"])
 
     def get_spec(self, name: str) -> tuple[int, str] | None:
         row = self.conn.execute(
@@ -138,12 +136,11 @@ class Store:
             for report in coverage.reports:
                 self.conn.execute(
                     """INSERT INTO run_sources
-                       (run_id, source, status, found, requests, skipped_cached,
-                        duration_ms, note)
-                       VALUES (?,?,?,?,?,?,?,?)""",
+                       (run_id, source, status, found, requests, duration_ms, note)
+                       VALUES (?,?,?,?,?,?,?)""",
                     (
                         run_id, report.source, report.status.value, report.found,
-                        report.requests, report.skipped_cached, report.duration_ms, report.note,
+                        report.requests, report.duration_ms, report.note,
                     ),
                 )
 
@@ -473,24 +470,6 @@ class Store:
                            last_verified=?, last_failure_kind=? WHERE id=?""",
                     (now, kind, registry_id),
                 )
-
-    # -------------------------------------------------------------- fetch cache
-
-    def cache_get(self, url: str) -> sqlite3.Row | None:
-        return self.conn.execute("SELECT * FROM fetch_cache WHERE url = ?", (url,)).fetchone()
-
-    def cache_put(
-        self, url: str, etag: str | None, last_modified: str | None, content_hash: str
-    ) -> None:
-        with self.conn:
-            self.conn.execute(
-                """INSERT INTO fetch_cache (url, etag, last_modified, fetched_at, content_hash)
-                   VALUES (?,?,?,?,?)
-                   ON CONFLICT(url) DO UPDATE SET etag=excluded.etag,
-                       last_modified=excluded.last_modified, fetched_at=excluded.fetched_at,
-                       content_hash=excluded.content_hash""",
-                (url, etag, last_modified, datetime.now().isoformat(), content_hash),
-            )
 
 
 def row_to_job(row: Any) -> Job:
