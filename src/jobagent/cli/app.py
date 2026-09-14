@@ -169,7 +169,12 @@ def run(
     """Execute a saved search."""
     store = open_store(db)
     search_id, spec = load_spec(store, name)
-    if budget:
+    if budget is not None:
+        # An explicit 0 is a real answer ("search nothing"), and a truthiness check
+        # silently substituted the saved budget for it.
+        if budget < 0:
+            console.print("[red]--budget cannot be negative.[/red]")
+            raise typer.Exit(1)
         spec = spec.model_copy(update={"source_budget": budget})
 
     # Without this a first run quietly searches nothing: discovery is fan-out over the

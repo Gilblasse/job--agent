@@ -140,27 +140,37 @@ def run_wizard(existing: SearchSpec | None = None) -> SearchSpec:
 
     # --- terms -------------------------------------------------------------------
     questionary.print("\nTerms", style="bold")
+    # Pre-checked from what is already saved. Hard-coding full_time silently narrowed
+    # an existing search to full-time whenever the user accepted the shown defaults.
+    stored_types = data.get("employment_types") or ["full_time"]
     employment = questionary.checkbox(
         "Employment types you will consider",
         choices=[
-            Choice("full_time", checked=True), Choice("part_time"),
-            Choice("contract"), Choice("internship"),
+            Choice(name, checked=name in stored_types)
+            for name in ("full_time", "part_time", "contract", "internship")
         ],
         style=STYLE,
     ).ask()
     data["employment_types"] = employment or []
 
-    if _confirm("Do you have a minimum pay requirement?"):
+    if _confirm("Do you have a minimum pay requirement?", bool(data.get("salary_min"))):
         basis = questionary.select(
-            "Is that hourly or annual?", choices=["year", "hour"], style=STYLE
+            "Is that hourly or annual?",
+            choices=["year", "hour"], default=data.get("salary_period", "year"), style=STYLE,
         ).ask()
         amount = questionary.text(
-            f"Minimum pay per {basis}", style=STYLE,
+            f"Minimum pay per {basis}",
+            default=str(int(data["salary_min"])) if data.get("salary_min") else "",
+            style=STYLE,
             validate=lambda v: v.replace(",", "").replace(".", "").isdigit() or "enter a number",
         ).ask()
         if amount:
             data["salary_min"] = float(amount.replace(",", ""))
             data["salary_period"] = basis
+    else:
+        # Answering "no" has to CLEAR an existing floor. Leaving the old value meant an
+        # edit could never remove a pay constraint.
+        data["salary_min"] = None
 
     freshness = questionary.text(
         "Only show jobs posted within how many days? (blank for any)",

@@ -67,9 +67,13 @@ jobagent company seed        # load the bundled registry of employer boards
 jobagent sources doctor      # check this actually works from your network
 ```
 
-`sources doctor` is a gate, not a diagnostic. It requires USAJOBS reachable, at least
-three ATS adapters returning real postings, and at least 500 registered boards routed to a
-working adapter. If it fails, fix that before trusting any search results.
+`sources doctor` is a gate, not a diagnostic. It requires at least three ATS adapters
+returning real postings and at least 500 registered boards routed to a working adapter.
+If it fails, fix that before trusting any search results.
+
+USAJOBS credentials are optional, so leaving them unset is reported as a coverage note
+rather than a failure — you simply get no federal roles. Credentials that are set but not
+working *do* fail the gate, because that is a broken source rather than an absent one.
 
 ```bash
 jobagent search create       # interactive
@@ -199,7 +203,7 @@ rather than promises:
 
 ## Verification status
 
-337 tests, all offline, run with `pytest`.
+391 tests, all offline, run with `pytest`.
 
 **These have never run against a live endpoint.** The environment this was built in
 refuses every job-source host at its egress proxy, so the adapters are verified against

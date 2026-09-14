@@ -23,6 +23,10 @@ from ..sources.catalog import CATALOG, all_adapters
 MIN_ATS_ADAPTERS = 3
 MIN_ROUTABLE_BOARDS = 500
 
+# USAJOBS credentials are optional (the README says so), so an unconfigured federal
+# source is reported as a coverage gap rather than failing the gate. A CONFIGURED source
+# that does not answer is a different thing, and does fail it.
+
 
 @dataclass
 class DoctorResult:
@@ -32,16 +36,19 @@ class DoctorResult:
     working_ats: list[str] = field(default_factory=list)
     usajobs_ok: bool = False
     failures: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
 
     @property
     def passed(self) -> bool:
         return not self.failures
 
     def summary(self) -> str:
+        federal = "USAJOBS reachable" if self.usajobs_ok else (
+            "USAJOBS not configured" if self.notes else "USAJOBS not reachable"
+        )
         return (
             f"{len(self.working_ats)} ATS adapters working, "
-            f"{self.routable} boards routable, "
-            f"USAJOBS {'reachable' if self.usajobs_ok else 'not reachable'}"
+            f"{self.routable} boards routable, {federal}"
         )
 
 
@@ -72,10 +79,19 @@ def run_doctor(store: Store, fetcher: Fetcher) -> DoctorResult:
         if platform in result.working_ats
     )
 
-    if not result.usajobs_ok:
-        usajobs = next((r for r in result.reports if r.source == "usajobs"), None)
+    usajobs = next((r for r in result.reports if r.source == "usajobs"), None)
+    if usajobs is not None and usajobs.status is SourceStatus.SKIPPED:
+        # No credentials configured. The README calls them optional, so an absent
+        # optional source is a coverage note, not a gate failure -- an ATS-only user must
+        # still be able to pass the check the README tells them to run first.
+        result.notes.append(
+            "USAJOBS is not configured, so this check covers employer ATS boards only. "
+            "Federal roles will not appear in any search."
+        )
+    elif not result.usajobs_ok:
+        # Configured but not answering is a broken source, which is a real failure.
         detail = usajobs.note if usajobs else "no report"
-        result.failures.append(f"USAJOBS is not returning results ({detail})")
+        result.failures.append(f"USAJOBS is configured but not returning results ({detail})")
     if len(result.working_ats) < MIN_ATS_ADAPTERS:
         result.failures.append(
             f"only {len(result.working_ats)} of {MIN_ATS_ADAPTERS} required ATS adapters "
@@ -112,6 +128,10 @@ def describe(result: DoctorResult) -> list[str]:
     lines.append(f"  {'routable total':16} {result.routable:>6}")
 
     lines.append("")
+    for note in result.notes:
+        lines.append(f"NOTE: {note}")
+    if result.notes:
+        lines.append("")
     if result.passed:
         lines.append(f"GATE PASSED: {result.summary()}")
     else:

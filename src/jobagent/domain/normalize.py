@@ -384,15 +384,43 @@ def normalize_title(title: str) -> str:
     """Canonical form of a job title, for duplicate detection.
 
     Drops requisition ids, bracketed qualifiers and trailing location suffixes, which are
-    the usual reason the same role looks like two different postings.
+    the usual reason one role looks like two postings. The location suffix is genuinely
+    removed rather than merely flattened: leaving it turned "Accountant - Dallas, TX" and
+    "Accountant" into different identities, so the same job was shown twice.
     """
     if not title:
         return ""
     text = title.lower()
     text = re.sub(r"[\(\[\{].*?[\)\]\}]", " ", text)
     text = re.sub(r"\b(?:req|requisition|job|id)[\s#:-]*\w*\d+\w*\b", " ", text)
+    text = _strip_location_suffix(text)
     text = re.sub(r"[^\w\s+#]", " ", text)
     return collapse_whitespace(text)
+
+
+# "Accountant - Dallas, TX", "Accountant | Remote", "Accountant, Austin TX"
+_LOCATION_SUFFIX = re.compile(
+    r"\s*[-–—|,]\s*(?:remote|hybrid|onsite|on-site|"
+    r"[a-z .']{2,30}(?:,\s*[a-z]{2}|,\s*[a-z .']{4,20})?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_location_suffix(text: str) -> str:
+    """Remove one trailing place or work-arrangement qualifier from a title."""
+    candidate = _LOCATION_SUFFIX.sub("", text).strip()
+    tail = text[len(candidate):].strip(" -–—|,")
+    # Only strip when the tail actually names a place or arrangement; otherwise
+    # "Accountant - Payroll" would lose the part that distinguishes the role.
+    if not candidate or candidate == text.strip():
+        return text
+    if re.search(r"\b[a-z]{2}\b\s*$", tail) and "," in tail:
+        return candidate
+    if tail.lower() in {"remote", "hybrid", "onsite", "on-site"}:
+        return candidate
+    if detect_country(tail)[0] is not None:
+        return candidate
+    return text
 
 
 def build_job(

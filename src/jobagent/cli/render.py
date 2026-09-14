@@ -207,14 +207,22 @@ def doctor_table(result: DoctorResult) -> list[Any]:
             Text("yes" if routable else "no", style="green" if routable else "dim"),
         )
 
+    notes = (
+        "\n\n" + "\n".join(f"[yellow]note:[/yellow] {n}" for n in result.notes)
+        if result.notes else ""
+    )
     verdict = (
-        Panel(f"[bold green]GATE PASSED[/bold green]\n{result.summary()}", border_style="green")
+        Panel(
+            f"[bold green]GATE PASSED[/bold green]\n{result.summary()}{notes}",
+            border_style="green",
+        )
         if result.passed
         else Panel(
             "[bold red]GATE FAILED[/bold red]\n"
             + result.summary()
             + "\n\n"
-            + "\n".join(f"  - {failure}" for failure in result.failures),
+            + "\n".join(f"  - {failure}" for failure in result.failures)
+            + notes,
             border_style="red",
         )
     )

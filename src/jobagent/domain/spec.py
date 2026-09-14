@@ -25,6 +25,7 @@ from .gates import (
     RequirementGate,
     SalaryFloorGate,
     SeniorityExcludeGate,
+    SponsorshipGate,
     TitleExcludesGate,
     UnverifiablePolicy,
     WorkplaceGate,
@@ -129,7 +130,19 @@ class SearchSpec(BaseModel):
     @field_validator("countries")
     @classmethod
     def _upper_countries(cls, value: list[str]) -> list[str]:
-        return [v.strip().upper() for v in value if v.strip()]
+        cleaned = [v.strip().upper() for v in value if v.strip()]
+        # This build is US-scoped: its sources are US employer boards and the federal
+        # system. An empty list disabled the country gate entirely, and any other value
+        # asked for jobs no configured source can supply -- either way a YAML file could
+        # quietly leave the scope the product documents.
+        if not cleaned:
+            return ["US"]
+        unsupported = [c for c in cleaned if c != "US"]
+        if unsupported:
+            raise ValueError(
+                f"this build searches US sources only; unsupported countries: {unsupported}"
+            )
+        return cleaned
 
     @field_validator(
         "titles", "related_titles", "excluded_titles", "keywords", "required_keywords",
@@ -266,23 +279,20 @@ def compile_gates(spec: SearchSpec) -> list[Gate]:
         gates.append(PhraseExcludesGate(name="excluded_content", phrases=barred))
 
     if spec.exclude_security_clearance:
-        gates.append(
-            PhraseExcludesGate(
-                name="security_clearance",
-                phrases=["security clearance", "ts/sci", "top secret", "secret clearance"],
+        # A requirement gate, not a phrase gate. A plain exclusion rejected
+        # "Security clearance NOT required", which is the same mistake the requirement
+        # classifier was written to avoid for credentials.
+        for term in ("security clearance", "TS/SCI", "top secret clearance"):
+            gates.append(
+                RequirementGate(term=term, when="required", policy=default_policy)
             )
-        )
 
     if spec.needs_visa_sponsorship:
+        # Only an explicit refusal excludes; silence is unverifiable rather than a pass.
+        # Most postings say nothing about sponsorship, and treating that silence as a
+        # confident match showed users jobs they cannot take.
         gates.append(
-            PhraseExcludesGate(
-                name="sponsorship",
-                phrases=[
-                    "no sponsorship", "not able to sponsor", "unable to sponsor",
-                    "without sponsorship", "must be authorized to work",
-                    "does not sponsor", "no visa sponsorship",
-                ],
-            )
+            SponsorshipGate(name="sponsorship", policy=default_policy)
         )
 
     for requirement in spec.excluded_requirements:

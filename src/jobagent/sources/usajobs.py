@@ -74,9 +74,19 @@ class UsaJobsAdapter(SourceAdapter):
         postings: list[RawPosting] = []
         failures: list[str] = []
         terms = request.terms or [""]
+        locations = request.locations or [""]
 
-        for term in terms[:4]:
-            for location in (request.locations or [""])[:3]:
+        # Recorded rather than silent: a job matching only the fifth title or the fourth
+        # metro is never retrieved, and a result set that incomplete should say so.
+        max_terms, max_locations = 4, 3
+        if len(terms) > max_terms or len(locations) > max_locations:
+            failures.append(
+                f"searched {min(len(terms), max_terms)} of {len(terms)} terms and "
+                f"{min(len(locations), max_locations)} of {len(locations)} locations"
+            )
+
+        for term in terms[:max_terms]:
+            for location in locations[:max_locations]:
                 # The run's budget is a cap on requests, not a suggestion. Without this
                 # a four-term, three-location search issued up to 48 requests whatever
                 # the caller asked for.

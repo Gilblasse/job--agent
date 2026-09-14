@@ -21,7 +21,7 @@ filters them hard with stated reasons, and remembers what it has shown.
 
 ## Verification evidence
 
-- 337 tests pass (`pytest -q`), plus 12 live tests deselected by default.
+- 391 tests pass (`pytest -q`), plus 12 live tests deselected by default.
   `ruff check src tests scripts` clean.
 - Genericity proven the hard way: one corpus, three unrelated searches, different correct
   answers, no code change. A test parses `src/` and fails on profession-specific terms in
@@ -30,6 +30,21 @@ filters them hard with stated reasons, and remembers what it has shown.
   board, missing credentials.
 - `sources doctor` was run against the real network here and failed honestly, naming the
   egress refusal per source rather than implying the sources were broken.
+
+## Second review pass (GitHub Copilot, on PR #1)
+
+CI was green, but the reviewer returned "Changes recommended": 16 posted comments and 22
+suppressed. All 38 were triaged and fixed, each with a regression test.
+
+The worst was a credential leak: `live_validate.sh` used `${VAR:-default}`, which expands
+to the *value* when the variable is set, so the line meant to print "configured" wrote the
+USAJOBS API key into a report saved to disk and meant to be shared.
+
+Also serious: a pay floor judged on the top of a range, so "$50k-$100k" cleared an $80k
+floor; two ways past the HTTP protections (an unreadable robots.txt read as permission, and
+a 429 retry that skipped the redirect and 403 checks); and Workday requisition ids that are
+unique only within a tenant being used for cross-board clustering — rebuilding the seed with
+namespaced ids found 11 boards the old key had been collapsing.
 
 ## Independent review
 

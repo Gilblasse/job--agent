@@ -615,3 +615,47 @@ def _describe_pay(job: Job) -> str:
         return f"{salary.minimum:,.0f}-{salary.maximum:,.0f} {unit}"
     value = salary.minimum if salary.minimum is not None else salary.maximum
     return f"{value:,.0f} {unit}" if value is not None else ""
+
+
+# Phrases that amount to "we will not sponsor". Kept separate from a generic exclusion
+# because the absence of any of them is not evidence that sponsorship IS offered.
+SPONSORSHIP_REFUSALS = [
+    "no sponsorship", "not able to sponsor", "unable to sponsor", "cannot sponsor",
+    "will not sponsor", "does not sponsor", "do not sponsor", "without sponsorship",
+    "no visa sponsorship", "not provide sponsorship", "not offer sponsorship",
+    "must be authorized to work", "must already be authorized",
+    "without the need for sponsorship", "not require sponsorship now or in the future",
+]
+
+SPONSORSHIP_OFFERS = [
+    "visa sponsorship available", "we sponsor", "will sponsor", "sponsorship available",
+    "offer sponsorship", "provide sponsorship", "h-1b sponsorship", "open to sponsorship",
+]
+
+
+@dataclass
+class SponsorshipGate(Gate):
+    """For a candidate who needs sponsorship.
+
+    Three outcomes, because a posting has three things it can do: refuse sponsorship,
+    offer it, or -- overwhelmingly the common case -- say nothing. Reading silence as a
+    pass presented jobs the user cannot take as confident matches.
+    """
+
+    name: str = "sponsorship"
+
+    def evaluate(self, job: Job, taxonomy: Taxonomy, today: date) -> GateResult:
+        rule = "employer must be willing to sponsor a visa"
+        text = job.searchable_text()
+        if not text.strip():
+            return self._unknown(rule, "posting has no text to search")
+
+        refusal = first_matching_phrase(text, SPONSORSHIP_REFUSALS)
+        if refusal:
+            return self._fail(
+                rule, evidence=refusal[0], detail=snippet(text, refusal[1], 60)
+            )
+        offer = first_matching_phrase(text, SPONSORSHIP_OFFERS)
+        if offer:
+            return self._pass(rule, evidence=offer[0], detail=snippet(text, offer[1], 60))
+        return self._unknown(rule, "posting does not say whether it sponsors")

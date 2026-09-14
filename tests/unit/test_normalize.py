@@ -208,3 +208,30 @@ class TestSalaryIsNotInvented:
     def test_a_single_figure_needs_a_pay_cue(self):
         assert parse_salary("Base salary $85,000").minimum == 85_000.0
         assert parse_salary("Suite $85,000 square feet of office") is None
+
+
+class TestTitleLocationSuffixes:
+    """Regression: the docstring promised location stripping the code did not do.
+
+    "Accountant - Dallas, TX" and "Accountant" got different identities, so one job was
+    shown twice.
+    """
+
+    @pytest.mark.parametrize(
+        "title", ["Accountant - Dallas, TX", "Accountant | Remote",
+                  "Accountant, Austin, Texas", "Accountant - Hybrid"],
+    )
+    def test_location_and_arrangement_suffixes_are_stripped(self, title):
+        from jobagent.domain.normalize import normalize_title
+
+        assert normalize_title(title) == "accountant"
+
+    @pytest.mark.parametrize(
+        "title", ["Accountant - Payroll", "Accountant - General Ledger",
+                  "Accounts Payable Clerk"],
+    )
+    def test_meaningful_suffixes_survive(self, title):
+        """Stripping "- Payroll" would erase what distinguishes the role."""
+        from jobagent.domain.normalize import normalize_title
+
+        assert normalize_title(title) != "accountant"

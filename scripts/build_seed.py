@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -39,10 +38,26 @@ US_NAMES = {"united states", "usa", "us", "united states of america"}
 
 
 def load(offline: str | None) -> list[dict]:
+    """Read the upstream company list.
+
+    The download goes through the project's own fetcher rather than urllib, so this
+    build-time script cannot become a second egress path with its own timeout, user
+    agent and rate-limit behaviour -- the whole point of routing everything through one
+    place.
+    """
     if offline:
         return json.loads(Path(offline).read_text())
-    with urllib.request.urlopen(SOURCE_URL, timeout=120) as response:  # noqa: S310
-        return json.loads(response.read().decode("utf-8"))
+
+    from jobagent.infra.http import HttpFetcher
+
+    with HttpFetcher() as fetcher:
+        response = fetcher.get(SOURCE_URL)
+    if not response.ok:
+        raise SystemExit(
+            f"could not fetch the company list (HTTP {response.status}). "
+            f"Download it manually and pass --offline."
+        )
+    return json.loads(response.text)
 
 
 def domain_of(website: str | None) -> str | None:

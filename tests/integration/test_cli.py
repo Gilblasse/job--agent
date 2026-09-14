@@ -207,3 +207,52 @@ class TestSourcesAndCompany:
         out = invoke("company", "import", str(csv_file), "--db", path)
         assert "Imported 2 boards" in out
         assert "no recognizable ATS board" in out
+
+
+class TestDoctorTreatsUsajobsAsOptional:
+    """Regression: the gate failed without USAJOBS credentials, while the README calls
+    them optional -- so the check the README tells users to run first could never pass
+    for an ATS-only user."""
+
+    def _result(self, tmp_path, monkeypatch, configured: bool):
+        from jobagent.engine.doctor import run_doctor
+        from jobagent.infra.store import Store
+        from jobagent.sources.registry import seed_registry
+        from tests.fakes import FakeFetcher
+
+        if configured:
+            monkeypatch.setenv("JOBAGENT_USAJOBS_KEY", "k")
+            monkeypatch.setenv("JOBAGENT_USAJOBS_EMAIL", "u@example.com")
+        else:
+            monkeypatch.delenv("JOBAGENT_USAJOBS_KEY", raising=False)
+            monkeypatch.delenv("JOBAGENT_USAJOBS_EMAIL", raising=False)
+
+        store = Store(str(tmp_path / "doc.sqlite3"))
+        seed_registry(store)
+        return run_doctor(store, FakeFetcher(default_status=500))
+
+    def test_unconfigured_credentials_are_a_note_not_a_failure(self, tmp_path, monkeypatch):
+        result = self._result(tmp_path, monkeypatch, configured=False)
+        assert not any("USAJOBS" in f for f in result.failures)
+        assert any("not configured" in n for n in result.notes)
+
+    def test_configured_but_broken_credentials_do_fail(self, tmp_path, monkeypatch):
+        result = self._result(tmp_path, monkeypatch, configured=True)
+        assert any("USAJOBS is configured but not returning" in f for f in result.failures)
+
+    def test_the_note_is_rendered_for_the_user(self, tmp_path, monkeypatch):
+        from jobagent.engine.doctor import describe
+
+        result = self._result(tmp_path, monkeypatch, configured=False)
+        assert any("NOTE:" in line for line in describe(result))
+
+
+class TestBudgetOverride:
+    def test_an_explicit_zero_budget_is_honoured(self, db):
+        """Regression: a truthiness check silently substituted the saved budget."""
+        out = invoke("run", "accounting-remote", "--db", db, "--budget", "0", "--quiet")
+        assert "0 postings" in out
+
+    def test_a_negative_budget_is_rejected(self, db):
+        result = runner.invoke(app, ["run", "accounting-remote", "--db", db, "--budget", "-1"])
+        assert result.exit_code == 1

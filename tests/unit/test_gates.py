@@ -424,3 +424,68 @@ class TestSalaryFloorJudgesTheMinimum:
         job = make_job(description="Pay rate: $11.00 per hour.")
         result = evaluate(job, spec, taxonomy, TODAY)
         assert not any("above floor" in s.name for s in result.signals)
+
+
+class TestSponsorshipNeedsEvidence:
+    """Regression: a plain exclusion made silence a confident match.
+
+    Most postings say nothing about sponsorship. Treating that as a pass showed a user who
+    needs sponsorship jobs they cannot take.
+    """
+
+    def test_an_explicit_refusal_rejects(self, taxonomy):
+        from jobagent.domain.gates import SponsorshipGate
+
+        job = make_job(description="We are unable to sponsor visas for this role.")
+        assert SponsorshipGate().evaluate(job, taxonomy, TODAY).outcome is GateOutcome.FAIL
+
+    def test_an_explicit_offer_passes(self, taxonomy):
+        from jobagent.domain.gates import SponsorshipGate
+
+        job = make_job(description="Visa sponsorship available for the right candidate.")
+        assert SponsorshipGate().evaluate(job, taxonomy, TODAY).outcome is GateOutcome.PASS
+
+    def test_silence_is_unverifiable(self, taxonomy):
+        from jobagent.domain.gates import SponsorshipGate
+
+        job = make_job(description="Own the monthly close. Great benefits.")
+        assert SponsorshipGate().evaluate(job, taxonomy, TODAY).outcome is GateOutcome.UNVERIFIABLE
+
+
+class TestClearanceUsesRequirementContext:
+    """Regression: the clearance gate rejected "Security clearance not required"."""
+
+    def test_a_posting_that_does_not_require_clearance_is_kept(self, taxonomy):
+        from jobagent.domain.matching import evaluate
+        from jobagent.domain.models import Decision
+        from jobagent.domain.spec import SearchSpec, compile_gates
+
+        spec = SearchSpec(name="t", exclude_security_clearance=True)
+        job = make_job(description="Security clearance not required for this position.")
+        assert evaluate(job, spec, taxonomy, TODAY, compile_gates(spec)).decision is Decision.MATCH
+
+    def test_a_posting_that_requires_clearance_is_rejected(self, taxonomy):
+        from jobagent.domain.matching import evaluate
+        from jobagent.domain.models import Decision
+        from jobagent.domain.spec import SearchSpec, compile_gates
+
+        spec = SearchSpec(name="t", exclude_security_clearance=True)
+        job = make_job(description="An active security clearance is required.")
+        result = evaluate(job, spec, taxonomy, TODAY, compile_gates(spec))
+        assert result.decision is Decision.REJECTED
+
+
+class TestSpecStaysInScope:
+    def test_a_non_us_country_is_rejected(self):
+        """A YAML file could otherwise ask for jobs no configured source can supply."""
+        import pytest as _pytest
+
+        from jobagent.domain.spec import SearchSpec
+
+        with _pytest.raises(ValueError, match="US sources only"):
+            SearchSpec(name="t", countries=["CA"])
+
+    def test_an_empty_country_list_does_not_disable_the_gate(self):
+        from jobagent.domain.spec import SearchSpec
+
+        assert SearchSpec(name="t", countries=[]).countries == ["US"]
