@@ -452,3 +452,74 @@ class TestPaginationFailuresAreNotEndOfResults:
         )
         assert result.report.status is not SourceStatus.OK
         assert result.postings == []
+
+
+class TestWorkdayQueriesEveryTerm:
+    """Regression: only the first search term was pushed down.
+
+    Workday is the one platform with real server-side search, so narrowing it to one term
+    discards jobs matching any other title before they are ever retrieved -- and no local
+    filter can recover what was never fetched.
+    """
+
+    def _fetcher(self):
+        accountant = {"total": 1, "jobPostings": [
+            {"title": "Accountant", "externalPath": "/job/Dallas/Accountant_R-9",
+             "locationsText": "Dallas, TX", "postedOn": "Posted 2 Days Ago"}]}
+        clerk = {"total": 1, "jobPostings": [
+            {"title": "Accounts Payable Clerk", "externalPath": "/job/Dallas/AP_R-8",
+             "locationsText": "Dallas, TX", "postedOn": "Posted 3 Days Ago"}]}
+
+        class TermAware(FakeFetcher):
+            def post_json(self, url, *, payload, headers=None):
+                self.calls.append(url)
+                self._requests += 1
+                term = (payload or {}).get("searchText", "")
+                offset = (payload or {}).get("offset", 0)
+                body = {"total": 0, "jobPostings": []}
+                if offset == 0:
+                    body = accountant if term == "Accountant" else (
+                        clerk if term == "Accounts Payable" else body
+                    )
+                from jobagent.ports import FetchResponse
+
+                return FetchResponse(url=url, status=200, text=json.dumps(body))
+
+        return TermAware()
+
+    def _run(self, terms: str):
+        target = BoardTarget(company="Acme", token="acme",
+                             extra={"wd": "5", "site": "External", "search_text": terms})
+        return WorkdayAdapter(today=date(2026, 9, 14), max_details=0).fetch_board(
+            self._fetcher(), target
+        )
+
+    def test_a_second_term_still_finds_its_jobs(self):
+        from jobagent.sources.ats.workday import TERM_SEPARATOR
+
+        titles = {p.title for p in self._run(TERM_SEPARATOR.join(["Accountant",
+                                                                 "Accounts Payable"]))}
+        assert titles == {"Accountant", "Accounts Payable Clerk"}
+
+    def test_one_term_alone_finds_only_its_own(self):
+        assert {p.title for p in self._run("Accountant")} == {"Accountant"}
+
+    def test_a_job_answering_two_terms_is_collected_once(self):
+        from jobagent.sources.ats.workday import TERM_SEPARATOR
+
+        postings = self._run(TERM_SEPARATOR.join(["Accountant", "Accountant"]))
+        assert len(postings) == 1
+
+    def test_planning_sends_every_term(self):
+        from jobagent.domain.spec import SearchSpec
+        from jobagent.engine.planning import build_plans
+        from jobagent.infra.store import Store
+        from jobagent.sources.ats.workday import TERM_SEPARATOR
+
+        store = Store(":memory:")
+        store.add_company("Acme", "workday", "acme:5:External", us_signal=True)
+        spec = SearchSpec(name="t", titles=["Accountant", "Bookkeeper"], source_budget=10)
+        plans = build_plans(spec, store, FakeFetcher(), date(2026, 9, 14),
+                            only_sources=["workday"])
+        sent = plans[0].request.targets[0].extra["search_text"]
+        assert TERM_SEPARATOR.join(["Accountant", "Bookkeeper"]) == sent

@@ -27,6 +27,7 @@ from datetime import date, timedelta
 from ..domain.spec import SearchSpec
 from ..infra.store import Store
 from ..ports import DiscoveryRequest, Fetcher
+from ..sources.ats.workday import TERM_SEPARATOR
 from ..sources.catalog import ats_adapters
 from ..sources.registry import targets_for
 
@@ -100,10 +101,11 @@ def build_plans(
             )
             continue
         # Only Workday offers real server-side search, so only Workday gets the query
-        # pushed down; the rest return whole boards and are filtered locally.
-        # It takes ONE search string, so the first term is used and the rest are not
-        # queried there. The adapter records that, rather than leaving the gap silent.
-        search_text = terms[0] if (platform == "workday" and terms) else ""
+        # pushed down; the rest return whole boards and are filtered locally. It takes one
+        # string per query, so every term is passed and the adapter queries each in turn --
+        # sending only the first would narrow discovery server-side, where no local filter
+        # can recover the jobs that were never retrieved.
+        search_text = TERM_SEPARATOR.join(terms) if (platform == "workday" and terms) else ""
         targets = targets_for(store, platform, limit=limit, search_text=search_text)
         plans.append(
             SourcePlan(

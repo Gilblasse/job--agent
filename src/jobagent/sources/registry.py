@@ -157,7 +157,8 @@ def targets_for(
                 pass
         if search_text:
             # Workday supports real server-side search, so the query is pushed down
-            # rather than pulling whole boards back to filter locally.
+            # rather than pulling whole boards back to filter locally. Terms arrive
+            # separated by a unit separator, which no legitimate search term contains.
             extra["search_text"] = search_text
         targets.append(
             BoardTarget(

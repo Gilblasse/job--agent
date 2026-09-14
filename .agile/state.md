@@ -21,7 +21,7 @@ filters them hard with stated reasons, and remembers what it has shown.
 
 ## Verification evidence
 
-- 391 tests pass (`pytest -q`), plus 12 live tests deselected by default.
+- 395 tests pass (`pytest -q`), plus 12 live tests deselected by default.
   `ruff check src tests scripts` clean.
 - Genericity proven the hard way: one corpus, three unrelated searches, different correct
   answers, no code change. A test parses `src/` and fails on profession-specific terms in

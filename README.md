@@ -203,7 +203,7 @@ rather than promises:
 
 ## Verification status
 
-391 tests, all offline, run with `pytest`.
+395 tests, all offline, run with `pytest`.
 
 **These have never run against a live endpoint.** The environment this was built in
 refuses every job-source host at its egress proxy, so the adapters are verified against

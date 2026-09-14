@@ -31,6 +31,10 @@ from .base import AtsAdapter, BoardTarget, ats_authority, require_ok
 
 PAGE_SIZE = 20  # hard platform limit; larger values silently return nothing
 
+# Search terms reach the adapter joined by a unit separator, a control character no
+# legitimate job title contains.
+TERM_SEPARATOR = "\x1f"
+
 WORKPLACE = {
     "remote": WorkplaceType.REMOTE,
     "fully remote": WorkplaceType.REMOTE,
@@ -47,6 +51,7 @@ class WorkdayAdapter(AtsAdapter):
     probe_tokens: tuple[str, ...] = ()
     max_pages: int = 3
     max_details: int = 20
+    max_terms: int = 4
     today: date | None = None
 
     def probe_targets(self) -> list[BoardTarget]:
@@ -69,17 +74,38 @@ class WorkdayAdapter(AtsAdapter):
     def fetch_board(
         self, fetcher: Fetcher, target: BoardTarget, today: date | None = None
     ) -> list[RawPosting]:
-        base = self._base(target)
         # The run's date, threaded from DiscoveryRequest. Relative "Posted 5 Days Ago"
         # values otherwise shift at a date boundary and freshness stops being
         # deterministic unless a caller hand-builds the adapter.
         as_of = today or self.today or date.today()
-        # Workday accepts a single search string, so a multi-title spec pushes only its
-        # first term down here; the rest are applied locally after retrieval.
-        search_text = target.extra.get("search_text", "")
-        postings: list[RawPosting] = []
-        seen_paths: list[str] = []
+        base = self._base(target)
 
+        # Workday takes ONE search string per query, so each wanted term gets its own
+        # query. Sending only the first narrowed discovery server-side, where no amount
+        # of local filtering can recover a job that was never retrieved.
+        raw_terms = target.extra.get("search_text", "")
+        terms = [t for t in raw_terms.split(TERM_SEPARATOR) if t] or [""]
+
+        postings: list[RawPosting] = []
+        paths: list[str] = []
+        seen: set[str] = set()
+
+        for search_text in terms[: self.max_terms]:
+            self._collect(fetcher, base, target, search_text, as_of, postings, paths, seen)
+
+        # Descriptions cost one request each, so they are capped. Without them the
+        # workplace and requirement gates cannot reach a verdict, which is precisely the
+        # information this product's hardest search needs -- hence a budget, not zero.
+        for posting, path in list(zip(postings, paths, strict=False))[: self.max_details]:
+            self._enrich(fetcher, base, posting, path)
+
+        return postings
+
+    def _collect(
+        self, fetcher: Fetcher, base: str, target: BoardTarget, search_text: str,
+        as_of: date, postings: list[RawPosting], paths: list[str], seen: set[str],
+    ) -> None:
+        """Run one query against one board, appending postings not already collected."""
         for page in range(self.max_pages):
             response = fetcher.post_json(
                 f"{base}/jobs",
@@ -101,15 +127,20 @@ class WorkdayAdapter(AtsAdapter):
                     f"{page + 1} of pagination",
                     status=response.status,
                 )
+
             payload = response.json() or {}
             listings = payload.get("jobPostings") if isinstance(payload, dict) else None
             if not isinstance(listings, list) or not listings:
-                break
+                return
 
             for item in listings:
                 if not isinstance(item, dict):
                     continue
                 path = str(item.get("externalPath") or "")
+                if not path or path in seen:
+                    continue  # one job can answer several terms
+                seen.add(path)
+
                 public_url = _public_url(target, path)
                 requisition = path.rsplit("/", 1)[-1] or path
                 postings.append(
@@ -132,18 +163,11 @@ class WorkdayAdapter(AtsAdapter):
                         authority=ats_authority(public_url, target.domain),
                     )
                 )
-                seen_paths.append(path)
+                paths.append(path)
 
             if len(listings) < PAGE_SIZE:
-                break
+                return
 
-        # Descriptions come one request at a time, so they are capped. Without them the
-        # workplace and requirement gates cannot reach a verdict, which is precisely the
-        # information this product's hardest search needs -- hence a budget, not zero.
-        for posting, path in list(zip(postings, seen_paths, strict=False))[: self.max_details]:
-            self._enrich(fetcher, base, posting, path)
-
-        return postings
 
     def _enrich(self, fetcher: Fetcher, base: str, posting: RawPosting, path: str) -> None:
         tail = path.rsplit("/", 1)[-1]
