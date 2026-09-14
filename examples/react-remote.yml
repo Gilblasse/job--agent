@@ -1,0 +1,29 @@
+# Same engine, different profession. Only this file changes.
+name: react-remote
+description: Mid-level remote React roles in the US, excluding senior and above.
+
+titles:
+  - React Developer
+  - Frontend Engineer
+  - Front End Developer
+  - Software Engineer, Frontend
+related_titles:
+  - UI Engineer
+  - Web Developer
+
+required_skills:
+  - React
+responsibilities_include:
+  - component
+  - user interface
+  - frontend
+excluded_skills:
+  - Angular
+  - Drupal
+
+seniority_exclude: [senior, staff, management]
+
+workplace: [remote]
+countries: [US]
+employment_types: [full_time]
+unverifiable_policy: flag

@@ -273,8 +273,8 @@ def detect_seniority(title: str, taxonomy: Taxonomy) -> tuple[str | None, str]:
         return None, ""
     for label in reversed(list(taxonomy.seniority)):
         for term in taxonomy.seniority[label]:
-            # Single-letter roman numerals are too noisy to match loosely.
-            if len(term) <= 2 and term not in {"sr", "jr", "ii", "iv"}:
+            # Short tokens are noisy, so only the unambiguous ones are matched.
+            if len(term) <= 2 and term not in {"sr", "jr", "ii", "iv", "vp"}:
                 continue
             span = find_phrase(title, term)
             if span:

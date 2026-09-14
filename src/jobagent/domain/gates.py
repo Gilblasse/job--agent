@@ -485,3 +485,41 @@ class CompanyExcludeGate(Gate):
         if hit:
             return self._fail(rule, evidence=hit[0])
         return self._pass(rule)
+
+
+@dataclass
+class LocationGate(Gate):
+    """The role must be in one of the places the user named.
+
+    Without this, naming cities only nudges the ranking, and a search for "hybrid project
+    manager in Dallas" happily returns San Francisco -- which is not a ranking problem,
+    it is a wrong answer.
+
+    Remote roles are exempt when the user accepts remote work: a fully remote job is not
+    bound to a metro, and failing it for "not being in Dallas" would be nonsense.
+    """
+
+    places: list[str] = field(default_factory=list)
+    remote_exempt: bool = True
+    name: str = "location"
+
+    def evaluate(self, job: Job, taxonomy: Taxonomy, today: date) -> GateResult:
+        rule = f"location must be one of {self.places}"
+        if not self.places:
+            return self._pass(rule, detail="no location requirement configured")
+
+        if self.remote_exempt and job.workplace is WorkplaceType.REMOTE:
+            return self._pass(
+                rule, evidence="remote", detail="remote roles are not tied to a place"
+            )
+
+        haystack = " ".join(
+            filter(None, [job.location.raw, job.location.city, job.location.region])
+        )
+        if not haystack.strip():
+            return self._unknown(rule, "posting does not state where the work is")
+
+        hit = first_matching_phrase(haystack, self.places)
+        if hit:
+            return self._pass(rule, evidence=hit[0], detail=job.location.display())
+        return self._fail(rule, evidence=job.location.display())

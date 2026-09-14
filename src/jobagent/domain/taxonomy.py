@@ -22,7 +22,12 @@ DEFAULT_SENIORITY: dict[str, list[str]] = {
     "mid": ["mid level", "mid-level", "intermediate", "ii", "iii"],
     "senior": ["senior", "sr", "sr.", "iv", "lead", "specialist iv"],
     "staff": ["staff", "principal", "distinguished", "fellow"],
-    "management": ["manager", "head of", "supervisor", "chief", "director", "vp",
+    # "Manager" is deliberately absent. In much of the labour market it is a job-family
+    # noun rather than a rank -- Project Manager, Case Manager, Account Manager and
+    # Program Manager are individual contributors -- so treating it as a seniority level
+    # silently deletes an entire category of work from any search that excludes
+    # management. A user who means the word literally can still exclude it by title.
+    "management": ["head of", "supervisor", "chief", "director", "vp",
                    "vice president", "president", "partner"],
 }
 

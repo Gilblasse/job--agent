@@ -146,8 +146,10 @@ class UsaJobsAdapter(SourceAdapter):
         key, email = credentials
         before = fetcher.requests_made
         try:
+            # No keyword: the probe asks "is this source answering at all", and any
+            # occupation used here would bake one profession into the health check.
             response = fetcher.get(
-                API, params={"Keyword": "accountant", "ResultsPerPage": 5},
+                API, params={"ResultsPerPage": 5},
                 headers=self._headers(key, email),
             )
         except Exception as error:  # noqa: BLE001

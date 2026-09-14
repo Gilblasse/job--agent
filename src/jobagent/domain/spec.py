@@ -18,6 +18,7 @@ from .gates import (
     CountryGate,
     FreshnessGate,
     Gate,
+    LocationGate,
     PhraseExcludesGate,
     PhraseRequiresGate,
     RequirementGate,
@@ -220,6 +221,17 @@ def compile_gates(spec: SearchSpec) -> list[Gate]:
 
     if spec.countries:
         gates.append(CountryGate(allowed=spec.countries, policy=default_policy))
+
+    # A named place is a requirement, not a preference. Treating it as ranking-only is how
+    # a search for work in one metro quietly returns another.
+    if spec.locations:
+        gates.append(
+            LocationGate(
+                places=spec.locations,
+                remote_exempt="remote" in spec.workplace,
+                policy=default_policy,
+            )
+        )
 
     if spec.excluded_companies:
         gates.append(CompanyExcludeGate(companies=spec.excluded_companies))

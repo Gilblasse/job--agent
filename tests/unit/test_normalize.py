@@ -121,11 +121,25 @@ class TestSeniority:
     @pytest.mark.parametrize(
         "title,level",
         [("Senior Accountant", "senior"), ("Junior Accountant", "entry"),
-         ("Staff Engineer", "staff"), ("Accounting Manager", "management"),
-         ("Accountant", None)],
+         ("Staff Engineer", "staff"), ("Director of Finance", "management"),
+         ("VP of Engineering", "management"), ("Accountant", None)],
     )
     def test_levels_are_read_from_the_title(self, title, level, taxonomy):
         assert detect_seniority(title, taxonomy)[0] == level
+
+    @pytest.mark.parametrize(
+        "title", ["Accounting Manager", "Project Manager", "Engineering Manager"]
+    )
+    def test_manager_alone_is_not_treated_as_a_seniority_level(self, title, taxonomy):
+        """A deliberate trade, documented in taxonomy.py.
+
+        "Manager" is a rank in "Engineering Manager" and a job family in "Project
+        Manager", and nothing profession-neutral tells the two apart. Reading it as a
+        rank silently deletes every project-management role from a search that excludes
+        management; not reading it as one merely shows a user some roles they can
+        exclude by title. The recoverable error is the better one.
+        """
+        assert detect_seniority(title, taxonomy)[0] is None
 
     def test_description_mentions_do_not_set_the_level(self, taxonomy):
         """"Partners with senior leadership" describes colleagues, not the role."""

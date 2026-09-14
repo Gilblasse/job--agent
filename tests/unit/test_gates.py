@@ -215,3 +215,73 @@ class TestInflectedMatching:
         job = make_job(description="Please apply through our careers page.")
         gate = PhraseExcludesGate(phrases=["AP"])
         assert gate.evaluate(job, taxonomy, TODAY).outcome is GateOutcome.PASS
+
+
+class TestLocationGate:
+    """A named place is a requirement, not a hint.
+
+    Regression: before this gate existed, `locations` only fed the ranking, so a search
+    for hybrid work in Dallas returned San Francisco roles near the top.
+    """
+
+    def test_a_job_in_the_named_metro_passes(self, taxonomy):
+        from jobagent.domain.gates import LocationGate
+
+        job = make_job(title="Project Manager", location="Dallas, TX")
+        gate = LocationGate(places=["Dallas", "Fort Worth"], remote_exempt=False)
+        assert gate.evaluate(job, taxonomy, TODAY).outcome is GateOutcome.PASS
+
+    def test_a_job_in_another_metro_is_rejected(self, taxonomy):
+        from jobagent.domain.gates import LocationGate
+
+        job = make_job(title="Project Manager", location="San Francisco, CA")
+        gate = LocationGate(places=["Dallas", "Fort Worth"], remote_exempt=False)
+        result = gate.evaluate(job, taxonomy, TODAY)
+        assert result.outcome is GateOutcome.FAIL
+        assert "San Francisco" in result.evidence
+
+    def test_remote_roles_are_exempt_when_remote_is_acceptable(self, taxonomy):
+        """A fully remote job is not tied to a metro; failing it would be nonsense."""
+        from jobagent.domain.gates import LocationGate
+
+        job = make_job(title="Project Manager", location="Remote - US",
+                       description="100% remote position.")
+        gate = LocationGate(places=["Dallas"], remote_exempt=True)
+        assert gate.evaluate(job, taxonomy, TODAY).outcome is GateOutcome.PASS
+
+    def test_remote_roles_are_not_exempt_when_the_user_wants_onsite_only(self, taxonomy):
+        from jobagent.domain.gates import LocationGate
+
+        job = make_job(title="Project Manager", location="Remote - US",
+                       description="100% remote position.")
+        gate = LocationGate(places=["Dallas"], remote_exempt=False)
+        assert gate.evaluate(job, taxonomy, TODAY).outcome is GateOutcome.FAIL
+
+    def test_a_posting_with_no_location_is_unverifiable(self, taxonomy):
+        from jobagent.domain.gates import LocationGate
+
+        job = make_job(title="Project Manager", location="")
+        gate = LocationGate(places=["Dallas"], remote_exempt=False)
+        assert gate.evaluate(job, taxonomy, TODAY).outcome is GateOutcome.UNVERIFIABLE
+
+
+class TestSeniorityIsNotConfusedWithJobFamily:
+    """"Manager" is a job-family noun in much of the labour market, not a rank.
+
+    Regression: Project Manager, Program Manager and Case Manager were all being read as
+    management-level and deleted by any search excluding management.
+    """
+
+    @pytest.mark.parametrize(
+        "title", ["Project Manager", "Program Manager", "Account Manager", "Case Manager"]
+    )
+    def test_manager_titles_survive_a_management_exclusion(self, title, taxonomy):
+        job = make_job(title=title)
+        gate = SeniorityExcludeGate(levels=["management"])
+        assert gate.evaluate(job, taxonomy, TODAY).outcome is not GateOutcome.FAIL
+
+    @pytest.mark.parametrize("title", ["Director of Finance", "VP of Engineering", "Head of Ops"])
+    def test_unambiguous_leadership_titles_are_still_excluded(self, title, taxonomy):
+        job = make_job(title=title)
+        gate = SeniorityExcludeGate(levels=["management"])
+        assert gate.evaluate(job, taxonomy, TODAY).outcome is GateOutcome.FAIL

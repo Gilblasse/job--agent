@@ -71,7 +71,7 @@ def run_wizard(existing: SearchSpec | None = None) -> SearchSpec:
     # --- the work itself ---------------------------------------------------------
     questionary.print("\nThe role", style="bold")
     data["titles"] = _list(
-        "Job titles you want", help_text="e.g. Accounts Payable, Junior Accountant",
+        "Job titles you want", help_text="exactly as they would appear in a posting",
         default=", ".join(data.get("titles", [])),
     )
     data["related_titles"] = _list(
@@ -172,7 +172,7 @@ def run_wizard(existing: SearchSpec | None = None) -> SearchSpec:
     questionary.print("\nConstraints", style="bold")
     credentials = _list(
         "Credentials that should rule a job OUT when required",
-        help_text="e.g. CPA, PMP, RN license. 'CPA preferred' will still be kept",
+        help_text="a licence or certification; jobs that merely PREFER it are still kept",
         default=", ".join(r["term"] for r in data.get("excluded_requirements", [])),
     )
     data["excluded_requirements"] = [{"term": term, "when": "required"} for term in credentials]
