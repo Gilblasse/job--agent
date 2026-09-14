@@ -17,7 +17,6 @@ from ..domain.models import (
     AuthorityTier,
     Coverage,
     Job,
-    JobSourceRef,
     Location,
     MatchResult,
     SalaryRange,

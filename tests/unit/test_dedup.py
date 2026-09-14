@@ -1,0 +1,90 @@
+"""Deduplication and authority ranking."""
+
+from __future__ import annotations
+
+from jobagent.domain.dedup import (
+    canonical_url,
+    choose_canonical,
+    cluster_postings,
+    identity_for,
+    url_authority,
+)
+from jobagent.domain.models import AuthorityTier
+from tests.conftest import make_posting
+
+
+class TestCanonicalUrl:
+    def test_tracking_parameters_are_removed(self):
+        assert canonical_url(
+            "https://boards.greenhouse.io/acme/jobs/1?gh_src=x&utm_source=y"
+        ) == "https://boards.greenhouse.io/acme/jobs/1"
+
+    def test_host_case_www_and_fragment_are_normalized(self):
+        assert canonical_url("https://WWW.Acme.com/jobs/1/#apply") == "https://acme.com/jobs/1"
+
+    def test_meaningful_query_parameters_are_kept(self):
+        assert "id=55" in canonical_url("https://acme.com/careers?id=55&utm_medium=email")
+
+
+class TestIdentity:
+    def test_the_same_role_from_two_sources_gets_one_identity(self):
+        assert identity_for("Acme, Inc.", "Senior Accountant (Remote)", "Dallas, TX") == \
+               identity_for("Acme Incorporated", "senior accountant", "Dallas, Texas")
+
+    def test_different_roles_stay_distinct(self):
+        assert identity_for("Acme", "Accountant", "Dallas, TX") != \
+               identity_for("Acme", "Controller", "Dallas, TX")
+
+    def test_same_role_in_different_cities_stays_distinct(self):
+        assert identity_for("Acme", "Accountant", "Dallas, TX") != \
+               identity_for("Acme", "Accountant", "Austin, TX")
+
+    def test_metro_spellings_collapse(self):
+        assert identity_for("Acme", "Accountant", "Dallas-Fort Worth, TX") == \
+               identity_for("Acme", "Accountant", "Dallas, TX")
+
+
+class TestAuthority:
+    def test_employer_domain_outranks_its_ats(self):
+        assert url_authority("https://careers.acme.com/jobs/1", "acme.com") > \
+               url_authority("https://boards.greenhouse.io/acme/jobs/1")
+
+    def test_ats_outranks_an_unknown_host(self):
+        assert url_authority("https://jobs.lever.co/acme/1") > \
+               url_authority("https://some-aggregator.example/jobs/1")
+
+
+class TestClustering:
+    def test_postings_sharing_a_url_merge_even_with_different_titles(self):
+        """A shared canonical URL is conclusive; wording differences are not."""
+        url = "https://boards.greenhouse.io/acme/jobs/9"
+        a = make_posting(title="Accountant", url=url, external_id="9")
+        b = make_posting(
+            title="Accountant - General Ledger", url=url + "?utm_source=x",
+            external_id="9", source="careersite",
+        )
+        assert len(cluster_postings([a, b])) == 1
+
+    def test_unrelated_postings_do_not_merge(self):
+        a = make_posting(title="Accountant", external_id="1")
+        b = make_posting(title="Warehouse Supervisor", external_id="2",
+                         url="https://boards.greenhouse.io/acme/jobs/2")
+        assert len(cluster_postings([a, b])) == 2
+
+    def test_canonical_record_is_the_most_authoritative(self):
+        ats = make_posting(
+            title="Accountant", description="Full description here",
+            authority=AuthorityTier.OFFICIAL_ATS,
+        )
+        site = make_posting(
+            title="Accountant", description="Full description here",
+            url="https://careers.acme.com/jobs/1", source="careersite",
+            authority=AuthorityTier.EMPLOYER_SITE,
+        )
+        assert choose_canonical([ats, site]) is site
+
+    def test_a_record_with_a_description_wins_among_equals(self):
+        """Gates read the description; a stub record would make them all unverifiable."""
+        empty = make_posting(description="", external_id="1")
+        full = make_posting(description="Own the monthly close.", external_id="2")
+        assert choose_canonical([empty, full]) is full

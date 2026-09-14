@@ -85,7 +85,38 @@ def collapse_whitespace(text: str) -> str:
     return text.strip()
 
 
-def phrase_pattern(phrase: str) -> re.Pattern[str]:
+# Endings stripped to find a word's stem, longest first so "auditing" loses "ing" rather
+# than just "g".
+_INFLECTIONS = ("ing", "ed", "es", "s")
+_MIN_WORD_FOR_STEMMING = 5
+_MIN_STEM = 4
+
+
+def _inflected(word: str) -> str:
+    """Build a pattern matching a word and its ordinary English inflections.
+
+    A user who excludes "auditing" means to exclude "the annual audit" too. Requiring an
+    exact form makes exclusions quietly porous in exactly the cases they were written
+    for, so the word is reduced to a stem and matched with an optional ending.
+
+    Short words are left alone. Stemming "plus" to "plu" or "ads" to "ad" buys nothing
+    and risks matching things the user never asked about.
+    """
+    escaped = re.escape(word)
+    if len(word) < _MIN_WORD_FOR_STEMMING:
+        return escaped
+    lowered = word.lower()
+    stem = lowered
+    for ending in _INFLECTIONS:
+        if lowered.endswith(ending) and len(lowered) - len(ending) >= _MIN_STEM:
+            stem = lowered[: -len(ending)]
+            break
+    if len(stem) < _MIN_STEM:
+        return escaped
+    return re.escape(stem) + r"(?:s|es|ed|ing)?"
+
+
+def phrase_pattern(phrase: str, *, inflect: bool = False) -> re.Pattern[str]:
     """Build a word-boundary-aware pattern for a phrase.
 
     Word boundaries matter more than they look: a bare substring search for "AP" hits
@@ -93,42 +124,52 @@ def phrase_pattern(phrase: str) -> re.Pattern[str]:
     match essentially every posting ever written.
 
     Internal whitespace is flexible so "cash management" still matches across a line
-    break, and a leading/trailing non-word character (as in "C++") drops the boundary on
-    that side, where ``\\b`` would never match.
+    break, and a leading or trailing non-word character (as in "C++") drops the boundary
+    on that side, where a word boundary could never match.
+
+    With ``inflect``, the final word also matches its common inflections. Only the final
+    word is stemmed: in a phrase like "budget creation" it is the head noun that varies,
+    while the modifier does not.
     """
-    tokens = [re.escape(t) for t in phrase.split()]
+    words = phrase.split()
+    tokens = [re.escape(t) for t in words]
+    if inflect and tokens:
+        tokens[-1] = _inflected(words[-1])
     core = r"[\s\-/]+".join(tokens)
     left = r"\b" if re.match(r"\w", phrase) else ""
     right = r"\b" if re.search(r"\w$", phrase) else ""
     return re.compile(left + core + right, re.IGNORECASE)
 
 
-def find_phrase(text: str, phrase: str) -> tuple[int, int] | None:
+def find_phrase(text: str, phrase: str, *, inflect: bool = False) -> tuple[int, int] | None:
     """Return the span of the first occurrence of ``phrase``, or None."""
     if not phrase or not text:
         return None
-    match = phrase_pattern(phrase).search(text)
+    match = phrase_pattern(phrase, inflect=inflect).search(text)
     return match.span() if match else None
 
 
-def find_all_phrases(text: str, phrase: str) -> list[tuple[int, int]]:
+def find_all_phrases(text: str, phrase: str, *, inflect: bool = False) -> list[tuple[int, int]]:
     """Return spans of every occurrence of ``phrase``."""
     if not phrase or not text:
         return []
-    return [m.span() for m in phrase_pattern(phrase).finditer(text)]
+    return [m.span() for m in phrase_pattern(phrase, inflect=inflect).finditer(text)]
 
 
-def contains_phrase(text: str, phrase: str) -> bool:
-    return find_phrase(text, phrase) is not None
+def contains_phrase(text: str, phrase: str, *, inflect: bool = False) -> bool:
+    return find_phrase(text, phrase, inflect=inflect) is not None
 
 
-def first_matching_phrase(text: str, phrases: list[str]) -> tuple[str, tuple[int, int]] | None:
+def first_matching_phrase(
+    text: str, phrases: list[str], *, inflect: bool = False
+) -> tuple[str, tuple[int, int]] | None:
     """Return the first phrase from ``phrases`` that occurs in ``text``, with its span."""
     for phrase in phrases:
-        span = find_phrase(text, phrase)
+        span = find_phrase(text, phrase, inflect=inflect)
         if span:
             return phrase, span
     return None
+
 
 
 def snippet(text: str, span: tuple[int, int], width: int = 60) -> str:

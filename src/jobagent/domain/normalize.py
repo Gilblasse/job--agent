@@ -15,7 +15,6 @@ import re
 from datetime import date, datetime
 
 from .models import (
-    AuthorityTier,
     Job,
     JobSourceRef,
     Location,
@@ -129,6 +128,17 @@ def parse_location(raw: str, country_hint: str | None = None) -> Location:
     if match and match.group(2) in _STATE_ABBREVS:
         city = match.group(1).strip()
         region = match.group(2)
+
+    if region is None:
+        # Spelled-out state names are folded to their abbreviation so that "Dallas, TX"
+        # and "Dallas, Texas" produce the same region and therefore the same identity.
+        for name, abbrev in US_STATES.items():
+            if find_phrase(raw.lower(), name):
+                region = abbrev
+                head = raw.lower().split(name)[0].strip(" ,")
+                if not city and head and len(head) < 60:
+                    city = head.title()
+                break
 
     country = (country_hint or "").upper() or None
     if not country:

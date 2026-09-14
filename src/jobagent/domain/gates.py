@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import date
-from enum import Enum
+from enum import StrEnum
 
 from .models import GateOutcome, GateResult, Job, WorkplaceType
 from .normalize import detect_seniority
@@ -28,14 +28,14 @@ from .text import (
 )
 
 
-class UnverifiablePolicy(str, Enum):
+class UnverifiablePolicy(StrEnum):
     """What to do when a gate cannot reach a verdict."""
 
     FLAG = "flag"      # keep the job, mark it uncertain, rank it lower
     STRICT = "strict"  # treat "cannot confirm" as "does not qualify"
 
 
-class RequirementContext(str, Enum):
+class RequirementContext(StrEnum):
     """Whether a qualification is demanded, merely welcomed, or unclear."""
 
     REQUIRED = "required"
@@ -146,10 +146,12 @@ def classify_requirement(text: str, term: str, taxonomy: Taxonomy) -> Requiremen
         # A negation is itself strong evidence the credential is not demanded.
         preferred += [(start, end, "not required") for start, end in negated]
 
-        nearest_required = min((_distance(local, (s[0], s[1])), s[2]) for s in required) \
-            if required else None
-        nearest_preferred = min((_distance(local, (s[0], s[1])), s[2]) for s in preferred) \
-            if preferred else None
+        nearest_required = (
+            min((_distance(local, (s[0], s[1])), s[2]) for s in required) if required else None
+        )
+        nearest_preferred = (
+            min((_distance(local, (s[0], s[1])), s[2]) for s in preferred) if preferred else None
+        )
 
         evidence = snippet(text, span, 70)
         if nearest_required and not nearest_preferred:
@@ -177,7 +179,9 @@ def classify_requirement(text: str, term: str, taxonomy: Taxonomy) -> Requiremen
             heading = _heading_context(text, span[0], taxonomy)
             if heading == "required":
                 findings.append(
-                    RequirementFinding(RequirementContext.REQUIRED, evidence, "requirements section")
+                    RequirementFinding(
+                        RequirementContext.REQUIRED, evidence, "requirements section"
+                    )
                 )
             elif heading == "preferred":
                 findings.append(
@@ -246,7 +250,7 @@ class TitleExcludesGate(Gate):
 
     def evaluate(self, job: Job, taxonomy: Taxonomy, today: date) -> GateResult:
         rule = f"title must not mention {self.phrases}"
-        hit = first_matching_phrase(job.title, self.phrases)
+        hit = first_matching_phrase(job.title, self.phrases, inflect=True)
         if hit:
             return self._fail(rule, evidence=hit[0], detail=f"title is {job.title!r}")
         return self._pass(rule)
@@ -265,9 +269,11 @@ class PhraseExcludesGate(Gate):
         if not text.strip():
             return self._unknown(rule, "posting has no text to search")
         for phrase in self.phrases:
-            span = find_phrase(text, phrase)
+            span = find_phrase(text, phrase, inflect=True)
             if span:
-                return self._fail(rule, evidence=phrase, detail=snippet(text, span, 60))
+                return self._fail(
+                    rule, evidence=text[span[0]:span[1]], detail=snippet(text, span, 60)
+                )
         return self._pass(rule)
 
 
@@ -285,7 +291,7 @@ class PhraseRequiresGate(Gate):
         text = job.searchable_text()
         if not text.strip():
             return self._unknown(rule, "posting has no text to search")
-        hit = first_matching_phrase(text, self.phrases)
+        hit = first_matching_phrase(text, self.phrases, inflect=True)
         if hit:
             return self._pass(rule, evidence=hit[0], detail=snippet(text, hit[1], 60))
         return self._fail(rule, detail="none of the wanted phrases appear")
@@ -328,8 +334,11 @@ class CountryGate(Gate):
             return self._pass(rule, detail="no country requirement configured")
         country = job.location.country
         if country is None:
-            hint = "remote posting with no country stated" if job.workplace is WorkplaceType.REMOTE \
+            hint = (
+                "remote posting with no country stated"
+                if job.workplace is WorkplaceType.REMOTE
                 else "posting does not state a country"
+            )
             return self._unknown(rule, hint)
         if country in self.allowed:
             return self._pass(rule, evidence=country, detail=job.location.display())

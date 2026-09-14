@@ -90,7 +90,7 @@ class SourceAdapter(Protocol):
 
     name: str
 
-    def discover(self, request: "DiscoveryRequest") -> "DiscoveryResult": ...
+    def discover(self, request: DiscoveryRequest) -> DiscoveryResult: ...
 
     def check(self, fetcher: Fetcher) -> SourceReport:
         """Probe for the go/no-go gate: is this source reachable and returning data?"""

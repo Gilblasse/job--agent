@@ -8,10 +8,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from enum import Enum
+from enum import Enum, StrEnum
 
 
-class WorkplaceType(str, Enum):
+class WorkplaceType(StrEnum):
     """Where the work physically happens.
 
     UNKNOWN is a first-class value, not a failure. Most job sources do not state this
@@ -35,7 +35,7 @@ class AuthorityTier(int, Enum):
     EMPLOYER_SITE = 3
 
 
-class SourceStatus(str, Enum):
+class SourceStatus(StrEnum):
     """Outcome of querying one source during one run.
 
     Recorded per run so coverage can be reported honestly: a search that reached four of
@@ -50,7 +50,7 @@ class SourceStatus(str, Enum):
     SKIPPED = "skipped"
 
 
-class UserStatus(str, Enum):
+class UserStatus(StrEnum):
     """Where the user stands with a job."""
 
     NEW = "new"
@@ -61,7 +61,7 @@ class UserStatus(str, Enum):
     CLOSED = "closed"
 
 
-class VerificationState(str, Enum):
+class VerificationState(StrEnum):
     """Whether we have confirmed the posting still exists.
 
     UNVERIFIED means we have not checked, which is different from GONE. Conflating them
@@ -73,14 +73,14 @@ class VerificationState(str, Enum):
     GONE = "gone"
 
 
-class Decision(str, Enum):
+class Decision(StrEnum):
     """What the matching engine concluded about a job for a given search."""
 
     MATCH = "match"
     REJECTED = "rejected"
 
 
-class GateOutcome(str, Enum):
+class GateOutcome(StrEnum):
     """Result of evaluating one hard gate against one job.
 
     UNVERIFIABLE is deliberately distinct from FAIL: the posting did not supply the
@@ -203,9 +203,15 @@ class Job:
     verified_at: datetime | None = None
 
     def searchable_text(self) -> str:
-        """Everything a phrase gate should look at, lowercased."""
+        """Everything a phrase gate should look at, in its original casing.
+
+        Deliberately not lowercased. Every matcher here is already case-insensitive, and
+        folding the case would only degrade the evidence quoted back to the user: a
+        rejection reading "matched 'cpa required'" looks like a bug next to the posting
+        it came from.
+        """
         parts = [self.title, self.company, self.description_text, self.location.raw]
-        return "\n".join(p for p in parts if p).lower()
+        return "\n".join(p for p in parts if p)
 
 
 @dataclass(frozen=True)
