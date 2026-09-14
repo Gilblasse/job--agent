@@ -51,6 +51,7 @@ also what makes the cloud evolution below a swap rather than a rewrite.
 | `domain/gates.py` | The hard-gate vocabulary, including requirement-context detection |
 | `domain/matching.py` | Gate evaluation plus the ranking ledger |
 | `domain/normalize.py` | Location, workplace, salary, seniority, title and company normalization |
+| `domain/places.py` | Country, region and city vocabulary for country detection; pure data |
 | `domain/dedup.py` | Identity keys, URL canonicalization, authority tiers |
 | `domain/taxonomy.py` | Profession-neutral vocabulary, overridable as data |
 | `ports.py` | `Fetcher`, `Clock`, `SourceAdapter`, `JobRepository` |

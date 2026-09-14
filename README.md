@@ -244,21 +244,28 @@ rather than promises:
 
 ## Verification status
 
-444 tests, all offline, run with `pytest`.
+495 tests, all offline, run with `pytest`.
 
-**These have never run against a live endpoint.** The environment this was built in
-refuses every job-source host at its egress proxy, so the adapters are verified against
-fixtures constructed from each vendor's *documented* response schema, not from recorded
-traffic. That proves field mapping is correct; it cannot prove the live endpoints still
-behave as documented.
+**Live-verified on 2026-09-14** from an ordinary home network, after being built in an
+environment that refused every job-source host:
 
-Two things follow, and neither is hidden:
+- `sources doctor` **passed**: Greenhouse, Lever, Ashby and Workday all returned real
+  postings on their first live call, and none of their `robots.txt` files disallows the
+  documented API paths.
+- The accounting benchmark read **18,238 live postings** from ~280 boards in about three
+  minutes and returned 10 matches, all US, the top one a remote Technical Accountant.
 
-1. **No robots.txt file was ever fetched.** The policy code is tested; the actual postures
-   of the hosts involved are unverified.
-2. Run `./scripts/live_validate.sh` on an unrestricted network before trusting results. It
-   runs the gate, all three example searches, and a re-run to confirm new-versus-seen
-   tracking, and writes a report.
+The first live run also found four real defects that no fixture had exercised, all fixed
+the same day and pinned in `tests/unit/test_live_findings.py`: country detection missed
+"Croatia", "Mumbai" and "FR - Paris" (the vocabulary was sixty hand-picked names; it is
+now every country, plus regions and major cities); relevance was satisfied by a title
+word anywhere in the body ("liaise with our accountant"); a Workday board over its
+description budget flooded the results with unverifiable flags; and a barred
+responsibility fired on "audit trail" in a requirements list. The retrospective lesson
+stands: the inputs nobody imagined are where the bugs were.
+
+Not yet run live: the React and Dallas–Fort Worth example searches, USAJOBS (needs a
+free key), and `company discover`. `./scripts/live_validate.sh` runs the full set.
 
 `pytest -m live` holds tests that hit real endpoints. They are excluded by default so CI
 never depends on third-party uptime.

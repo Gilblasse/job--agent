@@ -22,7 +22,9 @@ from .gates import (
     LocationGate,
     PhraseExcludesGate,
     PhraseRequiresGate,
+    RelevanceGate,
     RequirementGate,
+    ResponsibilityExcludesGate,
     SalaryFloorGate,
     SeniorityExcludeGate,
     SponsorshipGate,
@@ -247,14 +249,15 @@ def compile_gates(spec: SearchSpec) -> list[Gate]:
     if spec.excluded_companies:
         gates.append(CompanyExcludeGate(companies=spec.excluded_companies))
 
-    # Relevance: the job must actually be the kind of work asked for. Title phrases and
-    # responsibility phrases are pooled deliberately -- an "Accounting Specialist" doing
-    # accounts payable is a real match that a title-only gate would throw away.
+    # Relevance: the job must actually be the kind of work asked for. Title phrases are
+    # read from the title and responsibility phrases from the duties section -- an
+    # "Accounting Specialist" doing accounts payable is a real match that a title-only
+    # gate would throw away, while a marketing role that mentions an accountant is not.
     if spec.title_match == "hard" and (spec.all_wanted_titles or spec.responsibilities_include):
         gates.append(
-            PhraseRequiresGate(
-                name="relevance",
-                phrases=spec.all_wanted_titles + spec.responsibilities_include,
+            RelevanceGate(
+                title_phrases=spec.all_wanted_titles,
+                responsibility_phrases=spec.responsibilities_include,
                 policy=default_policy,
             )
         )
@@ -268,12 +271,17 @@ def compile_gates(spec: SearchSpec) -> list[Gate]:
             PhraseRequiresGate(name="required_credentials", phrases=spec.required_credentials)
         )
 
+    # Barred responsibilities are read from the part of the posting that describes the
+    # work, mirroring how wanted responsibilities are read. Everything else here is meant
+    # to fire on any mention, so it stays posting-wide.
+    if spec.responsibilities_exclude:
+        gates.append(
+            ResponsibilityExcludesGate(
+                phrases=spec.responsibilities_exclude, policy=default_policy
+            )
+        )
     barred = (
-        spec.excluded_keywords
-        + spec.excluded_skills
-        + spec.responsibilities_exclude
-        + spec.deal_breakers
-        + spec.shift_exclude
+        spec.excluded_keywords + spec.excluded_skills + spec.deal_breakers + spec.shift_exclude
     )
     if barred:
         gates.append(PhraseExcludesGate(name="excluded_content", phrases=barred))

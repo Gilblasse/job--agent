@@ -307,6 +307,165 @@ class PhraseRequiresGate(Gate):
         return self._fail(rule, detail="none of the wanted phrases appear")
 
 
+_BULLET = ("-", "*", "\u2022", "\u25e6", "\u2013", "\u2014", ">", "#")
+
+
+def _as_heading(line: str) -> str:
+    """A line reduced to what it would be as a heading: no bullet, no trailing colon."""
+    stripped = line.strip().lstrip("".join(_BULLET) + " ").rstrip(" :\u2013\u2014-")
+    return " ".join(stripped.split()).lower()
+
+
+def responsibility_text(text: str, taxonomy: Taxonomy) -> str | None:
+    """The part of a posting that describes the work, or None when it has no such part.
+
+    Everything from a responsibilities heading down to the next heading. Bounded by the
+    next heading rather than a fixed window because a duties list can be three lines or
+    thirty, and reading past it into "About us" is precisely the mistake being avoided.
+
+    A heading is a line that is either a known section name or short, unpunctuated,
+    capitalised and not a bullet. Bullets are checked on the raw line: a first version
+    stripped the marker first and then mistook every short bullet for a heading.
+    """
+    if not text:
+        return None
+    wanted = {h.lower() for h in taxonomy.responsibility_headings}
+    known = wanted | {
+        h.lower() for h in taxonomy.requirement_headings + taxonomy.preference_headings
+    }
+
+    lines = text.split("\n")
+    sections: list[str] = []
+    index = 0
+    while index < len(lines):
+        if _as_heading(lines[index]) not in wanted:
+            index += 1
+            continue
+        body: list[str] = []
+        index += 1
+        while index < len(lines):
+            raw = lines[index].strip()
+            reduced = _as_heading(raw)
+            is_bullet = raw[:1] in _BULLET or raw[:2].rstrip(".)").isdigit()
+            words = reduced.split()
+            looks_like_heading = reduced in known or (
+                not is_bullet and 1 <= len(words) <= 6 and raw[:1].isupper()
+                and not raw.endswith((".", ",", ";"))
+            )
+            if looks_like_heading:
+                break
+            body.append(lines[index])
+            index += 1
+        sections.append("\n".join(body))
+    joined = "\n".join(sections).strip()
+    return joined if sections else None
+
+
+@dataclass
+class RelevanceGate(Gate):
+    """The posting must be the kind of work asked for.
+
+    Two kinds of evidence, read from two different places:
+
+    - A wanted title, in the title. Never in the body: on the first live run a marketing
+      role passed an accounting search because its description said "liaise with our
+      accountant".
+    - A wanted responsibility, in the part of the body that describes the work. Not in
+      the company blurb: a sales role at a vendor of accounts-payable software passed on
+      its own product pitch. Postings with no recognisable sections are read in full,
+      because refusing to read them would discard real matches for a heuristic.
+
+    Either is enough. A wanted title with an off-topic body is still the job the user
+    asked for by name; an unlisted title doing the wanted work is the case the
+    responsibility phrases exist to catch.
+
+    A title that names none of the wanted work, on a posting with no description to
+    read, FAILS rather than coming back unverifiable. The title is the employer's own
+    one-line statement of what the job is and it is always present, so the title branch
+    always reaches a verdict; UNVERIFIABLE is for when no branch can. The first version
+    said unverifiable here, and a Workday board whose descriptions were over budget put
+    twenty software and sales roles into an accounting search as flags.
+    """
+
+    title_phrases: list[str] = field(default_factory=list)
+    responsibility_phrases: list[str] = field(default_factory=list)
+    name: str = "relevance"
+
+    def evaluate(self, job: Job, taxonomy: Taxonomy, today: date) -> GateResult:
+        rule = (
+            f"title must mention one of {self.title_phrases}, or the work must include "
+            f"one of {self.responsibility_phrases}"
+        )
+        if not self.title_phrases and not self.responsibility_phrases:
+            return self._pass(rule, detail="no relevance requirement configured")
+
+        hit = first_matching_phrase(job.title, self.title_phrases, inflect=True)
+        if hit:
+            return self._pass(rule, evidence=hit[0], detail=f"title is {job.title!r}")
+
+        if not self.responsibility_phrases:
+            return self._fail(rule, evidence=job.title, detail="no wanted phrase in title")
+
+        body = job.description_text
+        if not body.strip():
+            return self._fail(
+                rule, evidence=job.title,
+                detail="title names none of the wanted work, and no description was retrieved",
+            )
+
+        duties = responsibility_text(body, taxonomy)
+        haystack = duties if duties is not None else body
+        where = "the responsibilities section" if duties is not None else "the posting"
+        hit = first_matching_phrase(haystack, self.responsibility_phrases, inflect=True)
+        if hit:
+            return self._pass(
+                rule, evidence=hit[0], detail=f"in {where}: {snippet(haystack, hit[1], 60)}"
+            )
+        return self._fail(
+            rule, evidence=job.title,
+            detail=f"no wanted phrase in title, and none of the responsibilities in {where}",
+        )
+
+
+@dataclass
+class ResponsibilityExcludesGate(Gate):
+    """No barred responsibility may appear in the part of the posting describing the work.
+
+    The mirror of ``RelevanceGate``'s responsibility branch, and scoped the same way for
+    the same reason. Excluding "auditing" as a responsibility is meant to drop jobs whose
+    work is auditing; read against the whole posting it dropped an accounts-payable
+    manager whose requirements section asked for "attention to audit trail". Barred
+    keywords and deal-breakers stay posting-wide -- those are meant to fire on any mention.
+
+    Postings with no recognisable sections are read in full, as in the relevance gate.
+    A posting with no text at all cannot be checked, so it is unverifiable, not clear.
+    """
+
+    phrases: list[str] = field(default_factory=list)
+    name: str = "excluded_responsibilities"
+
+    def evaluate(self, job: Job, taxonomy: Taxonomy, today: date) -> GateResult:
+        rule = f"the work must not include {self.phrases}"
+        if not self.phrases:
+            return self._pass(rule, detail="no responsibility exclusions configured")
+        # The title is part of the work statement: "Auditor" is an auditing job.
+        hit = first_matching_phrase(job.title, self.phrases, inflect=True)
+        if hit:
+            return self._fail(rule, evidence=hit[0], detail=f"title is {job.title!r}")
+        body = job.description_text
+        if not body.strip():
+            return self._unknown(rule, "no description to check the responsibilities against")
+        duties = responsibility_text(body, taxonomy)
+        haystack = duties if duties is not None else body
+        where = "the responsibilities section" if duties is not None else "the posting"
+        hit = first_matching_phrase(haystack, self.phrases, inflect=True)
+        if hit:
+            return self._fail(
+                rule, evidence=hit[0], detail=f"in {where}: {snippet(haystack, hit[1], 60)}"
+            )
+        return self._pass(rule, detail=f"none of the barred responsibilities in {where}")
+
+
 @dataclass
 class WorkplaceGate(Gate):
     """The role's onsite/hybrid/remote arrangement must be one the user accepts."""

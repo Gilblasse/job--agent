@@ -19,10 +19,11 @@ filters them hard with stated reasons, and remembers what it has shown.
 | M5 | CLI, wizard, results, export | done |
 | M6 | Genericity proof, docs, live-validation handoff | done |
 | M7 | Registry growth: Common Crawl board discovery | done |
+| M8 | First live validation, and the defects it found | done |
 
 ## Verification evidence
 
-- 444 tests pass (`pytest -q`), plus 12 live tests deselected by default.
+- 495 tests pass (`pytest -q`), plus 12 live tests deselected by default.
   `ruff check src tests scripts` clean.
 - Genericity proven the hard way: one corpus, three unrelated searches, different correct
   answers, no code change. A test parses `src/` and fails on profession-specific terms in
@@ -31,6 +32,38 @@ filters them hard with stated reasons, and remembers what it has shown.
   board, missing credentials.
 - `sources doctor` was run against the real network here and failed honestly, naming the
   egress refusal per source rather than implying the sources were broken.
+
+## M8 — first live run, 2026-09-14
+
+Cloned to a home network. `sources doctor` passed on the first attempt: all four P1
+adapters returned real postings, and no robots.txt blocks the documented API paths. The
+accounting benchmark read 18,238 live postings in about three minutes.
+
+The first pass surfaced 18 matches, and 15 of them were wrong. Four defects, none of
+which any fixture had exercised, each now pinned in `tests/unit/test_live_findings.py`
+with the real input that exposed it:
+
+1. **Country detection was a list of sixty names.** "Croatia", "Hong Kong", "Mumbai",
+   "FR - Paris", "AU - Melbourne" and "Remote-Iberia" all read as "does not state a
+   country" and surfaced as flags on a US-only search. "San Francisco, Remote" read as
+   unknown in the other direction. Replaced with `domain/places.py`: every country,
+   regions, sub-national regions, ~330 non-US and ~200 US cities, compiled once.
+2. **Relevance was satisfied by a passing mention.** Title phrases were searched in the
+   body; "Marketing Coordinator" passed on "liaise with our accountant". Now title
+   phrases match the title, responsibility phrases match the duties section.
+3. **An over-budget Workday board flooded the results.** With no description fetched, the
+   first fix reported relevance as unverifiable, and twenty Adobe engineering and sales
+   roles appeared as flags. The title always reaches a verdict; it now fails.
+4. **A barred responsibility fired anywhere in the posting.** "Manager, Accounts Payable
+   and Expenses" in San Ramon was rejected on "audit trail" in its requirements. Barred
+   responsibilities are now scoped to the duties section, as wanted ones are.
+
+Third run: 18,238 postings, 10 matches, all US; the top result a remote Technical
+Accountant. The remaining weak matches are the known limit of a phrase gate -- it cannot
+tell *doing* accounts payable from *selling* accounts-payable software -- and the ranking
+scores them accordingly.
+
+Not yet run live: the React and DFW example searches, USAJOBS, `company discover`.
 
 ## M7 — board discovery from the Common Crawl index
 
@@ -95,7 +128,10 @@ deduplication and dead caching scaffolding.
    as a public read-only API, and `api.ashbyhq.com` reportedly 401s on `/robots.txt`.
    Both platforms are held at P2 and unshipped pending that check.
 3. **The three live searches have not run.** `scripts/live_validate.sh` is the handoff.
-4. **No Common Crawl sweep has run against the live index.** Four contract details were
+4. ~~No adapter has ever run against a live endpoint.~~ **Resolved 2026-09-14**: see M8.
+   Items 1 and 2 above are superseded for the four P1 adapters; SmartRecruiters and
+   Workable remain unverified and unshipped.
+5. **No Common Crawl sweep has run against the live index.** Four contract details were
    since checked against Common Crawl's published documentation and confirmed correct:
    the `showNumPages` response shape (`{pageSize, blocks, pages}`), NDJSON one record per
    line under `output=json`, the record's field being `url`, and pages being numbered `0`

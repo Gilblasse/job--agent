@@ -39,7 +39,17 @@ reach, and the request budget is the search strategy. Before changing discovery,
 
 ## Before trusting any result
 
-No adapter in this repository has ever run against a live endpoint, and no robots.txt has
-ever been fetched — the environment it was built in blocks every job-source host. Run
-`./scripts/live_validate.sh` on a real network first, and read `jobagent sources doctor`
-before believing an empty result means an empty market.
+Run `jobagent sources doctor` first and read it; an empty result set is only an empty
+market if the gate passed. The four P1 adapters were live-verified on 2026-09-14 and the
+first live run found four defects no fixture had exercised (`tests/unit/test_live_findings.py`).
+When a live run surfaces a wrong match or a wrong rejection, add the real input to that
+file before fixing it — live data is where the remaining bugs are.
+
+## Relevance and exclusions read the work, not the whole posting
+
+Wanted titles are matched against the title only. Wanted and barred *responsibilities*
+are matched against the responsibilities section when the posting has one, and the whole
+body otherwise (`responsibility_text` in `domain/gates.py`). Do not widen either to the
+full posting: the first live run showed a marketing role matching an accounting search on
+"liaise with our accountant", and an AP manager rejected on "audit trail" in a skills list.
+Keywords and deal-breakers are deliberately posting-wide; that is what they are for.

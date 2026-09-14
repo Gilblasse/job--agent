@@ -213,7 +213,7 @@ class TestOneCorpusThreeSearches:
         assert "seniority_excludes" in reasons("Senior Accountant")
         assert "requirement:CPA" in reasons("Senior Accountant")
         assert "title_excludes" in reasons("Staff Accountant")
-        assert "excluded_content" in reasons("Internal Auditor")
+        assert "excluded_responsibilities" in reasons("Internal Auditor")
         assert "country" in reasons("Accountant")
 
     def test_cpa_preferred_survives_while_cpa_required_does_not(self, store, monkeypatch):

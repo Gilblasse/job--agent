@@ -22,6 +22,13 @@ from .models import (
     SalaryRange,
     WorkplaceType,
 )
+from .places import (
+    AMBIGUOUS_PREFIXES,
+    ISO_CODES,
+    NON_US_VOCAB,
+    PREFIX_ALIASES,
+    US_CITY_VOCAB,
+)
 from .taxonomy import Taxonomy
 from .text import collapse_whitespace, contains_phrase, find_phrase, html_to_text, snippet
 
@@ -49,42 +56,36 @@ US_PHRASES: list[str] = [
     "remote us", "remote - us", "remote (us)", "us remote", "anywhere in the us",
     "anywhere in the united states", "us only", "domestic us",
     "authorized to work in the united states", "must reside in the us",
+    "us - remote", "us-remote", "guam", "u.s. virgin islands",
 ]
 
-# Deliberately excludes names that collide with US states (notably Georgia): in job
-# postings the state is overwhelmingly the intended reading, and a wrong FAIL here
-# silently drops valid US jobs.
-NON_US_COUNTRIES: dict[str, str] = {
-    "canada": "CA", "united kingdom": "GB", "england": "GB", "scotland": "GB",
-    "wales": "GB", "northern ireland": "GB", "ireland": "IE", "germany": "DE",
-    "france": "FR", "spain": "ES", "portugal": "PT", "italy": "IT", "netherlands": "NL",
-    "belgium": "BE", "switzerland": "CH", "austria": "AT", "sweden": "SE", "norway": "NO",
-    "denmark": "DK", "finland": "FI", "poland": "PL", "czech republic": "CZ",
-    "czechia": "CZ", "romania": "RO", "bulgaria": "BG", "greece": "GR", "hungary": "HU",
-    "ukraine": "UA", "turkey": "TR", "israel": "IL", "india": "IN", "china": "CN",
-    "japan": "JP", "south korea": "KR", "singapore": "SG", "malaysia": "MY",
-    "indonesia": "ID", "philippines": "PH", "vietnam": "VN", "thailand": "TH",
-    "australia": "AU", "new zealand": "NZ", "brazil": "BR", "argentina": "AR",
-    "chile": "CL", "colombia": "CO", "peru": "PE", "mexico": "MX", "costa rica": "CR",
-    "south africa": "ZA", "nigeria": "NG", "kenya": "KE", "egypt": "EG",
-    "united arab emirates": "AE", "dubai": "AE", "saudi arabia": "SA", "qatar": "QA",
-    "pakistan": "PK", "bangladesh": "BD", "sri lanka": "LK",
-}
-
-# Region shorthands are not countries, but they do establish non-US scope just as firmly.
-NON_US_REGIONS: dict[str, str] = {"emea": "EMEA", "apac": "APAC", "latam": "LATAM"}
+# The country, region and city vocabularies live in ``places``; they are large and they
+# are data. What stays here is the resolution order.
+_PREFIXED = re.compile(r"(?<![A-Za-z])([A-Z]{2})\s*[-\u2013\u2014]\s*([A-Za-z][^,;|]*)")
 
 _CITY_STATE = re.compile(r"([A-Za-z .'-]+),\s*([A-Z]{2})\b")
 
 
-def detect_country(text: str) -> tuple[str | None, str]:
+def detect_country(text: str, *, prefixes: bool = True) -> tuple[str | None, str]:
     """Infer an ISO country code from free text.
 
     Returns ``(code, evidence)``; ``code`` is None when nothing decisive was found, which
     the US gate reports as UNVERIFIABLE rather than guessing.
 
-    US signals are checked first and win ties. A posting reading "Remote (US) or Canada"
-    is genuinely open to US applicants, and reporting it as Canadian would be wrong.
+    Resolution order, and why:
+
+    1. US phrases, then "City, ST", then spelled-out states. US signals are checked first
+       and win ties: "Remote (US) or Canada" is open to US applicants, and "Paris, TX"
+       is Texas however famous the other Paris is.
+    2. Every non-US country, region and city, as one leftmost-longest search.
+    3. US cities by bare name. After the non-US pass, so "Paris or Austin" fails the
+       US-only gate -- the safe error.
+    4. A two-letter prefix ("FR - Sophia Antipolis") when nothing above recognised the
+       city. A code that is both a state and a country ("CA", "PA", "IN") with an
+       unrecognised city is reported as unknown rather than guessed either way.
+
+    ``prefixes`` is off when the text is a job title: "HR - Business Partner" is not a
+    Croatian posting, and "QA - Remote" is not in Qatar.
     """
     if not text:
         return None, ""
@@ -104,15 +105,28 @@ def detect_country(text: str) -> tuple[str | None, str]:
         if span:
             return "US", snippet(text, span, 24)
 
-    for name, code in NON_US_COUNTRIES.items():
-        span = find_phrase(lowered, name)
-        if span:
-            return code, snippet(text, span, 24)
+    found = NON_US_VOCAB.find(text)
+    if found:
+        return found[0], snippet(text, found[1], 24)
 
-    for name, code in NON_US_REGIONS.items():
-        span = find_phrase(lowered, name)
-        if span:
-            return code, snippet(text, span, 24)
+    found = US_CITY_VOCAB.find(text)
+    if found:
+        return "US", snippet(text, found[1], 24)
+
+    if prefixes:
+        for match in _PREFIXED.finditer(text):
+            code = PREFIX_ALIASES.get(match.group(1), match.group(1))
+            rest = match.group(2).strip().lower()
+            if rest in {"remote", "hybrid", "onsite", "on-site", "virtual", ""}:
+                continue
+            if code == "US":
+                return "US", match.group(0)
+            if code in AMBIGUOUS_PREFIXES:
+                return None, ""
+            if code in _STATE_ABBREVS:
+                return "US", match.group(0)
+            if code in ISO_CODES:
+                return code, match.group(0)
 
     return None, ""
 
@@ -446,7 +460,9 @@ def build_job(
         # Title and location only. Scanning the description let "we are a United States
         # company" in the boilerplate of a Toronto posting resolve the job to the US and
         # slip past a US-only gate.
-        country, _ = detect_country(f"{posting.title}\n{posting.location_raw}")
+        # The location alone was already tried by parse_location; this adds the title.
+        # Prefix parsing is off for titles: "HR - Business Partner" is not Croatian.
+        country, _ = detect_country(posting.title, prefixes=False)
         if country:
             location = Location(
                 raw=location.raw, city=location.city, region=location.region, country=country

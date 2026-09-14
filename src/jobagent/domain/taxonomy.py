@@ -102,6 +102,23 @@ DEFAULT_PREFERENCE_HEADINGS: list[str] = [
     "preferred skills", "pluses", "what would set you apart", "extra credit",
 ]
 
+# Headings under which a posting describes the work itself. A responsibility phrase found
+# here is evidence about the job; the same phrase in the company blurb is evidence about
+# the company's product, which is how a sales role at an accounts-payable vendor matched
+# an accounts-payable search on the first live run.
+DEFAULT_RESPONSIBILITY_HEADINGS: list[str] = [
+    "responsibilities", "key responsibilities", "your responsibilities",
+    "duties", "duties and responsibilities", "roles and responsibilities",
+    "what you'll do", "what you will do", "what you'll be doing", "what you will be doing",
+    "what you'll own", "what you will own", "what you'll work on", "what you will work on",
+    "the role", "your role", "about the role", "about this role", "in this role",
+    "role overview", "job summary", "job description", "position summary",
+    "the opportunity", "day to day", "day-to-day", "a day in the life", "your impact",
+    "what you'll achieve", "how you'll contribute", "how you will contribute",
+    "essential functions", "essential duties", "primary responsibilities",
+    "core responsibilities", "job duties", "your mission", "the job",
+]
+
 
 @dataclass(frozen=True)
 class Taxonomy:
@@ -122,6 +139,9 @@ class Taxonomy:
     )
     preference_headings: list[str] = field(
         default_factory=lambda: list(DEFAULT_PREFERENCE_HEADINGS)
+    )
+    responsibility_headings: list[str] = field(
+        default_factory=lambda: list(DEFAULT_RESPONSIBILITY_HEADINGS)
     )
 
     @classmethod
