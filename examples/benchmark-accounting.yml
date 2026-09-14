@@ -1,0 +1,39 @@
+# The brief's benchmark, expressed entirely as data.
+# Nothing in src/ knows what accounting is; swap this file to search another profession.
+name: accounting-remote
+description: Remote accounts payable / junior accounting roles, no senior or CPA-required posts.
+
+titles:
+  - Accounts Payable
+  - Junior Accountant
+  - Accountant
+  - Cash Management
+related_titles:
+  - AP Specialist
+  - Accounting Specialist
+  - Accounting Clerk
+  - Staff Accounting Assistant
+excluded_titles:
+  - Staff Accountant
+
+responsibilities_include:
+  - accounts payable
+  - cash management
+  - invoice processing
+  - bank reconciliation
+responsibilities_exclude:
+  - auditing
+  - budget creation
+  - forecasting
+
+seniority_exclude: [senior, staff, management]
+
+excluded_requirements:
+  - term: CPA
+    when: required
+
+workplace: [remote]
+countries: [US]
+unverifiable_policy: flag
+max_results: 200
+source_budget: 400

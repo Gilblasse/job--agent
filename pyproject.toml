@@ -40,3 +40,8 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Typer's API *requires* calling typer.Option/Argument in parameter defaults; B008 is a
+# false positive against that framework rather than a finding.
+"src/jobagent/cli/app.py" = ["B008"]
