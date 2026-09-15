@@ -265,7 +265,15 @@ def compile_gates(spec: SearchSpec) -> list[Gate]:
     if spec.required_keywords:
         gates.append(PhraseRequiresGate(name="required_keywords", phrases=spec.required_keywords))
     if spec.required_skills:
-        gates.append(PhraseRequiresGate(name="required_skills", phrases=spec.required_skills))
+        # Skills are names, not words: no inflection, and matched with the user's casing,
+        # or "React" matches "react to volatility shifts". A lower-case skill in the spec
+        # still matches case-insensitively.
+        gates.append(
+            PhraseRequiresGate(
+                name="required_skills", phrases=spec.required_skills,
+                inflect=False, match_case=True,
+            )
+        )
     if spec.required_credentials:
         gates.append(
             PhraseRequiresGate(name="required_credentials", phrases=spec.required_credentials)
@@ -280,9 +288,14 @@ def compile_gates(spec: SearchSpec) -> list[Gate]:
                 phrases=spec.responsibilities_exclude, policy=default_policy
             )
         )
-    barred = (
-        spec.excluded_keywords + spec.excluded_skills + spec.deal_breakers + spec.shift_exclude
-    )
+    if spec.excluded_skills:
+        gates.append(
+            PhraseExcludesGate(
+                name="excluded_skills", phrases=spec.excluded_skills,
+                inflect=False, match_case=True,
+            )
+        )
+    barred = spec.excluded_keywords + spec.deal_breakers + spec.shift_exclude
     if barred:
         gates.append(PhraseExcludesGate(name="excluded_content", phrases=barred))
 

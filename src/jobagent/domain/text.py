@@ -120,7 +120,9 @@ def _inflected(word: str) -> str:
     return re.escape(stem) + r"(?:s|es|ed|ing)?"
 
 
-def phrase_pattern(phrase: str, *, inflect: bool = False) -> re.Pattern[str]:
+def phrase_pattern(
+    phrase: str, *, inflect: bool = False, match_case: bool = False
+) -> re.Pattern[str]:
     """Build a word-boundary-aware pattern for a phrase.
 
     Word boundaries matter more than they look: a bare substring search for "AP" hits
@@ -134,6 +136,12 @@ def phrase_pattern(phrase: str, *, inflect: bool = False) -> re.Pattern[str]:
     With ``inflect``, the final word also matches its common inflections. Only the final
     word is stemmed: in a phrase like "budget creation" it is the head noun that varies,
     while the modifier does not.
+
+    With ``match_case``, a phrase the user wrote with a capital letter is matched exactly
+    as written. This exists for skills: "React" the library is not "react" the verb, and
+    on the first live run a trading role passed a React search on "react to volatility
+    shifts". A lower-case phrase is still matched case-insensitively, so the user's own
+    casing decides, and nothing changes for anyone who did not ask.
     """
     words = phrase.split()
     tokens = [re.escape(t) for t in words]
@@ -142,14 +150,17 @@ def phrase_pattern(phrase: str, *, inflect: bool = False) -> re.Pattern[str]:
     core = r"[\s\-/]+".join(tokens)
     left = r"\b" if re.match(r"\w", phrase) else ""
     right = r"\b" if re.search(r"\w$", phrase) else ""
-    return re.compile(left + core + right, re.IGNORECASE)
+    flags = 0 if match_case and any(c.isupper() for c in phrase) else re.IGNORECASE
+    return re.compile(left + core + right, flags)
 
 
-def find_phrase(text: str, phrase: str, *, inflect: bool = False) -> tuple[int, int] | None:
+def find_phrase(
+    text: str, phrase: str, *, inflect: bool = False, match_case: bool = False
+) -> tuple[int, int] | None:
     """Return the span of the first occurrence of ``phrase``, or None."""
     if not phrase or not text:
         return None
-    match = phrase_pattern(phrase, inflect=inflect).search(text)
+    match = phrase_pattern(phrase, inflect=inflect, match_case=match_case).search(text)
     return match.span() if match else None
 
 
@@ -165,11 +176,11 @@ def contains_phrase(text: str, phrase: str, *, inflect: bool = False) -> bool:
 
 
 def first_matching_phrase(
-    text: str, phrases: list[str], *, inflect: bool = False
+    text: str, phrases: list[str], *, inflect: bool = False, match_case: bool = False
 ) -> tuple[str, tuple[int, int]] | None:
     """Return the first phrase from ``phrases`` that occurs in ``text``, with its span."""
     for phrase in phrases:
-        span = find_phrase(text, phrase, inflect=inflect)
+        span = find_phrase(text, phrase, inflect=inflect, match_case=match_case)
         if span:
             return phrase, span
     return None

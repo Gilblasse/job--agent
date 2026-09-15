@@ -48,6 +48,20 @@ and `jobagent sources doctor` counts only what a working adapter can actually re
 Because reach *is* the registry, growing it is the highest-leverage thing you can do:
 
 ```bash
+jobagent company add https://boards.greenhouse.io/acme     # one board, from its URL
+jobagent company add https://acme.com/careers              # or from a careers page
+jobagent company import companies.csv                      # many at once
+```
+
+**`company discover` is built but held.** On its first live run, both Common Crawl hosts
+answered `robots.txt` with `Disallow: /`. That is almost certainly aimed at web spiders
+rather than at the query API Common Crawl documents for programmatic use — but this tool
+does not guess at intent, and it has no flag to override a robots file. It refuses, says
+why, and carries on. The feature stays in the codebase, tested, until Common Crawl says
+in so many words that API clients are not what the file means. That is the same posture
+that holds SmartRecruiters and Workable unshipped. What it would do, when allowed:
+
+```bash
 jobagent company discover                  # sweep the Common Crawl index for boards
 jobagent company discover --platform workday --pages 20
 jobagent company discovery-status          # how far each sweep has got
@@ -244,7 +258,7 @@ rather than promises:
 
 ## Verification status
 
-495 tests, all offline, run with `pytest`.
+500 tests, all offline, run with `pytest`.
 
 **Live-verified on 2026-09-14** from an ordinary home network, after being built in an
 environment that refused every job-source host:
@@ -264,8 +278,15 @@ description budget flooded the results with unverifiable flags; and a barred
 responsibility fired on "audit trail" in a requirements list. The retrospective lesson
 stands: the inputs nobody imagined are where the bugs were.
 
-Not yet run live: the React and Dallas–Fort Worth example searches, USAJOBS (needs a
-free key), and `company discover`. `./scripts/live_validate.sh` runs the full set.
+All three example searches have now run live. The React search first matched an options
+trader on "react to volatility shifts" — skills are now matched as names, with the user's
+casing — and the Dallas–Fort Worth search returned four hybrid/onsite project-management
+roles in the metro, all four defensible, from 1,307 boards. Two example specs were
+tightened along the way: a bare "component" or "stakeholder" as a responsibility phrase
+matches nearly everything.
+
+Not yet run live: USAJOBS (needs a free key). `company discover` ran and was refused by
+Common Crawl's `robots.txt`; see above.
 
 `pytest -m live` holds tests that hit real endpoints. They are excluded by default so CI
 never depends on third-party uptime.

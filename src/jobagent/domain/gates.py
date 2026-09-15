@@ -272,6 +272,10 @@ class PhraseExcludesGate(Gate):
 
     phrases: list[str] = field(default_factory=list)
     name: str = "phrase_excludes"
+    # Skills are names of things, not words. Stemming a name is how "Rust" would match
+    # "rusted"; ignoring its case is how "React" matched "react to volatility shifts".
+    inflect: bool = True
+    match_case: bool = False
 
     def evaluate(self, job: Job, taxonomy: Taxonomy, today: date) -> GateResult:
         rule = f"posting must not mention {self.phrases}"
@@ -279,7 +283,7 @@ class PhraseExcludesGate(Gate):
         if not text.strip():
             return self._unknown(rule, "posting has no text to search")
         for phrase in self.phrases:
-            span = find_phrase(text, phrase, inflect=True)
+            span = find_phrase(text, phrase, inflect=self.inflect, match_case=self.match_case)
             if span:
                 return self._fail(
                     rule, evidence=text[span[0]:span[1]], detail=snippet(text, span, 60)
@@ -293,6 +297,9 @@ class PhraseRequiresGate(Gate):
 
     phrases: list[str] = field(default_factory=list)
     name: str = "phrase_requires"
+    # See PhraseExcludesGate: skills are names, and are matched as the user wrote them.
+    inflect: bool = True
+    match_case: bool = False
 
     def evaluate(self, job: Job, taxonomy: Taxonomy, today: date) -> GateResult:
         rule = f"posting must mention one of {self.phrases}"
@@ -301,7 +308,9 @@ class PhraseRequiresGate(Gate):
         text = job.searchable_text()
         if not text.strip():
             return self._unknown(rule, "posting has no text to search")
-        hit = first_matching_phrase(text, self.phrases, inflect=True)
+        hit = first_matching_phrase(
+            text, self.phrases, inflect=self.inflect, match_case=self.match_case
+        )
         if hit:
             return self._pass(rule, evidence=hit[0], detail=snippet(text, hit[1], 60))
         return self._fail(rule, detail="none of the wanted phrases appear")

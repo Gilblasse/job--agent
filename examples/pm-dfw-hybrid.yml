@@ -15,11 +15,15 @@ related_titles:
   - Delivery Manager
   - Implementation Manager
 
+# Read from the posting's responsibilities section. Keep these specific to the work:
+# a bare "stakeholder" or "schedule" let a Senior AI Engineer through on the first live run.
 responsibilities_include:
   - project plan
-  - stakeholder
-  - schedule
+  - project schedule
+  - stakeholder management
   - budget tracking
+  - manage projects
+  - project delivery
 responsibilities_exclude:
   - software development lifecycle ownership
 

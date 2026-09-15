@@ -23,7 +23,7 @@ filters them hard with stated reasons, and remembers what it has shown.
 
 ## Verification evidence
 
-- 495 tests pass (`pytest -q`), plus 12 live tests deselected by default.
+- 500 tests pass (`pytest -q`), plus 12 live tests deselected by default.
   `ruff check src tests scripts` clean.
 - Genericity proven the hard way: one corpus, three unrelated searches, different correct
   answers, no code change. A test parses `src/` and fails on profession-specific terms in
@@ -63,7 +63,22 @@ Accountant. The remaining weak matches are the known limit of a phrase gate -- i
 tell *doing* accounts payable from *selling* accounts-payable software -- and the ranking
 scores them accordingly.
 
-Not yet run live: the React and DFW example searches, USAJOBS, `company discover`.
+**React search, live.** 43 matches on the first pass, two of them an options trader and
+a macro analyst. Two causes: the example spec's `component` matched "salary is one
+component of total compensation", and `React` as a required skill matched "react to
+volatility shifts". The spec is fixed; the engine now matches skills as names -- no
+inflection, and with the user's casing (decision 25). Second pass: 35 matches, all
+software or UI roles, the top seven remote frontend roles in the US.
+
+**DFW search, live.** The case the README called hardest. 13 matches, all US, all
+hybrid or onsite, all in the metro; four after tightening `stakeholder` and `schedule`
+in the example spec. Top: Project Manager, Brillio, Dallas, hybrid. That is a fact about
+the market across 1,307 ATS boards, and a better one than predicted.
+
+**`company discover`, live.** Refused. Both Common Crawl hosts answer `Disallow: /`
+(decision 26). The feature stays built and tested; the CLI now explains the refusal.
+
+Not yet run live: USAJOBS (needs a free key).
 
 ## M7 — board discovery from the Common Crawl index
 
@@ -131,7 +146,9 @@ deduplication and dead caching scaffolding.
 4. ~~No adapter has ever run against a live endpoint.~~ **Resolved 2026-09-14**: see M8.
    Items 1 and 2 above are superseded for the four P1 adapters; SmartRecruiters and
    Workable remain unverified and unshipped.
-5. **No Common Crawl sweep has run against the live index.** Four contract details were
+5. ~~No Common Crawl sweep has run against the live index.~~ **Ran 2026-09-14 and was
+   refused by robots.txt** — see M8 and decision 26. The paragraph below describes what
+   was verified from documentation before that. Four contract details were
    since checked against Common Crawl's published documentation and confirmed correct:
    the `showNumPages` response shape (`{pageSize, blocks, pages}`), NDJSON one record per
    line under `output=json`, the record's field being `url`, and pages being numbered `0`
@@ -148,11 +165,11 @@ deduplication and dead caching scaffolding.
 1. Run `./scripts/live_validate.sh` on an unrestricted network; read the gate result first.
 2. Resolve the two robots conflicts; ship SmartRecruiters and Workable only if clean.
 3. Record the real coverage of `pm-dfw-hybrid` in the README, whatever it turns out to be.
-4. Run `jobagent company discover --platform workday --pages 20` repeatedly on an
-   unrestricted network. Workday is the coverage gap and the tenants are only reachable
-   this way; the sweep is deliberately slow, so it needs several passes.
-5. Compare `pm-dfw-hybrid` before and after that sweep. If Workday discovery does not move
-   the onsite-metro case, the whole discovery route is worth less than it looks.
+4. Ask Common Crawl, on their public group, whether `Disallow: /` on the index host is
+   meant to cover clients of the documented CDX API. Their answer decides whether
+   `company discover` ships. Do not add a bypass in the meantime.
+5. Get a free USAJOBS key and run the DFW search again; federal roles are the one
+   onsite-metro source not yet exercised.
 
 ## Retrospective
 

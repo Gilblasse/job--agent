@@ -237,3 +237,43 @@ class TestExcludedResponsibilitiesAreScopedToTheWork:
         # has not been passed. Silence is not a clean bill.
         job = make_job(title="Finance Associate", description="")
         assert self._gate().evaluate(job, taxonomy, TODAY).outcome is GateOutcome.UNVERIFIABLE
+
+
+class TestSkillsAreNamesNotWords:
+    """"Index Options Volatility Trader" passed a React search's required-skills gate on
+    "Monitor and react to volatility shifts". Stemming a skill name is how "Rust" matches
+    "rusted" and "Excel" matches "excelled"."""
+
+    def _skills(self, *phrases):
+        from jobagent.domain.gates import PhraseRequiresGate
+
+        return PhraseRequiresGate(
+            name="required_skills", phrases=list(phrases), inflect=False, match_case=True
+        )
+
+    def test_a_capitalised_skill_is_not_the_lower_case_verb(self, taxonomy):
+        # "Index Options Volatility Trader" at IMC, live.
+        job = make_job(title="Trader", description="Monitor and react to volatility shifts.")
+        assert self._skills("React").evaluate(job, taxonomy, TODAY).outcome is GateOutcome.FAIL
+
+    def test_the_skill_as_written_still_matches(self, taxonomy):
+        job = make_job(title="Engineer", description="Experience building React applications.")
+        assert self._skills("React").evaluate(job, taxonomy, TODAY).outcome is GateOutcome.PASS
+
+    def test_a_lower_case_skill_stays_case_insensitive(self, taxonomy):
+        # The user's casing decides. Someone who writes "python" gets "Python" too.
+        job = make_job(title="Engineer", description="Strong Python skills.")
+        assert self._skills("python").evaluate(job, taxonomy, TODAY).outcome is GateOutcome.PASS
+
+    def test_a_skill_does_not_inflect(self, taxonomy):
+        job = make_job(title="Engineer", description="Our pipes have rusted through.")
+        assert self._skills("rust").evaluate(job, taxonomy, TODAY).outcome is GateOutcome.FAIL
+
+    def test_the_spec_compiles_skills_as_names(self):
+        from jobagent.domain.spec import SearchSpec, compile_gates
+
+        spec = SearchSpec(name="x", required_skills=["Rust"], excluded_skills=["Excel"])
+        by_name = {g.name: g for g in compile_gates(spec)}
+        for name in ("required_skills", "excluded_skills"):
+            assert by_name[name].inflect is False
+            assert by_name[name].match_case is True

@@ -13,8 +13,11 @@ related_titles:
 
 required_skills:
   - React
+# Phrases here are read from the posting's responsibilities section. Keep them specific:
+# a bare "component" matched "salary is one component of total compensation".
 responsibilities_include:
-  - component
+  - React components
+  - UI components
   - user interface
   - frontend
 excluded_skills:

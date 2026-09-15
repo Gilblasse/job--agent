@@ -563,6 +563,16 @@ def company_discover(
             active_crawl = discovery.latest_crawl()
         except Exception as error:  # noqa: BLE001
             console.print(f"[red]Could not reach the Common Crawl index: {error}[/red]")
+            if "robots" in str(error):
+                # Known, not a bug. Found on the first live run: both Common Crawl hosts
+                # publish "Disallow: /". Their documented API almost certainly is not
+                # what that is aimed at, but this tool does not guess at intent -- it
+                # honours the file until the operator says otherwise. See README.
+                console.print(
+                    "[yellow]Common Crawl's robots.txt disallows automated access to the "
+                    "index, so this tool will not read it. Registry growth still works "
+                    "through `company add <url>` and `company import <csv>`.[/yellow]"
+                )
             raise typer.Exit(1) from None
 
         console.print(f"[dim]Crawl {active_crawl}[/dim]")
