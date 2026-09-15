@@ -70,6 +70,19 @@ class TestLocation:
     def test_remote_is_not_recorded_as_a_city(self):
         assert parse_location("Remote").city is None
 
+    def test_several_places_structure_the_first_and_keep_them_all(self):
+        """USAJOBS and Workable list a multi-city posting semicolon-separated.
+
+        Scanning the whole string for a state found "New York" before "Texas" because
+        the states are checked alphabetically, and took "Dallas, Texas, United States;"
+        as the city.
+        """
+        location = parse_location(
+            "Dallas, Texas, United States; New York, New York, United States"
+        )
+        assert (location.city, location.region, location.country) == ("Dallas", "TX", "US")
+        assert "New York" in location.raw
+
 
 class TestWorkplace:
     def test_source_field_beats_text_inference(self, taxonomy):

@@ -19,6 +19,7 @@ from jobagent.sources.ats.ashby import AshbyAdapter
 from jobagent.sources.ats.base import BoardTarget
 from jobagent.sources.ats.greenhouse import GreenhouseAdapter
 from jobagent.sources.ats.lever import LeverAdapter
+from jobagent.sources.ats.workable import WorkableAdapter
 from jobagent.sources.ats.workday import WorkdayAdapter
 from jobagent.sources.usajobs import UsaJobsAdapter
 from tests.fakes import FakeFetcher, blocked, unavailable
@@ -97,6 +98,82 @@ class TestAshby:
 
     def test_apply_url_is_preferred_over_the_listing_url(self):
         assert self.postings[0].apply_url.endswith("/application")
+
+
+class TestWorkable:
+    """The fixture's shape is copied from a live capture, 2026-09-15 (see fixtures)."""
+
+    def setup_method(self):
+        self.fetcher = FakeFetcher(routes={"apply.workable.com": fixture("workable_board")})
+        self.postings = WorkableAdapter().fetch_board(self.fetcher, acme())
+        self.by_id = {p.external_id: p for p in self.postings}
+
+    def test_details_are_requested_in_one_call_per_board(self):
+        assert len(self.fetcher.calls) == 1
+        assert "/api/v1/widget/accounts/acme" in self.fetcher.calls[0]
+
+    def test_one_job_in_several_cities_is_one_posting_with_every_city(self):
+        """The widget repeats a multi-city job once per city under one shortcode.
+
+        Keeping the copies separate gave the deduper four postings with one identity,
+        and whichever city survived decided whether a metro search saw the job.
+        """
+        assert len(self.postings) == 4
+        folded = self.by_id["W1AAAA0001"].location_raw
+        assert folded == "Dallas, Texas, United States; New York, New York, United States"
+
+    def test_a_folded_posting_still_matches_a_metro_search(self):
+        from jobagent.domain.normalize import parse_location
+
+        location = parse_location(self.by_id["W1AAAA0001"].location_raw, "US")
+        assert (location.city, location.region, location.country) == ("Dallas", "TX", "US")
+        assert "New York" in location.raw
+
+    def test_country_comes_from_the_iso_code_when_locations_agree(self):
+        assert self.by_id["W1AAAA0001"].country_hint == "US"
+        assert self.by_id["W3CCCC0003"].country_hint == "US"
+
+    def test_mixed_non_us_locations_leave_the_country_to_text_detection(self):
+        assert self.by_id["W2BBBB0002"].country_hint is None
+        assert "Madrid" in self.by_id["W2BBBB0002"].location_raw
+
+    def test_telecommuting_is_remote_and_its_absence_is_unknown_not_onsite(self):
+        assert self.by_id["W2BBBB0002"].workplace_hint is WorkplaceType.REMOTE
+        assert self.by_id["W1AAAA0001"].workplace_hint is WorkplaceType.UNKNOWN
+
+    def test_requirements_and_benefits_join_the_description_when_published(self):
+        html = self.by_id["W3CCCC0003"].description_html
+        assert "Run client projects" in html and "PMP preferred" in html
+        assert "401k" in html
+
+    def test_apply_url_dates_and_authority(self):
+        posting = self.by_id["W1AAAA0001"]
+        assert posting.apply_url.endswith("/apply")
+        assert posting.posted_at == date(2026, 7, 28)
+        assert posting.authority is AuthorityTier.OFFICIAL_ATS
+        assert posting.employment_type == "Full-time"
+
+    def test_entries_with_no_identity_and_non_dict_entries_are_skipped(self):
+        """A board with a stray string and an id-less draft must not raise or leak."""
+        assert "" not in self.by_id
+        assert all(p.title != "Untitled draft with no identity" for p in self.postings)
+
+    def test_flat_location_fields_are_used_when_the_structured_list_is_absent(self):
+        posting = self.by_id["W4DDDD0004"]
+        assert posting.location_raw == "Plano, Texas, United States"
+        # No ISO code without the structured list; text detection takes over.
+        assert posting.country_hint is None
+
+    def test_workable_publishes_no_pay(self):
+        """Recorded as a fact about the source, so the pay gate reports unverifiable."""
+        assert all(p.salary is None for p in self.postings)
+
+    def test_a_missing_tenant_is_gone_not_empty(self):
+        from jobagent.ports import FetchError
+
+        with pytest.raises(FetchError) as info:
+            WorkableAdapter().fetch_board(FakeFetcher(), acme())
+        assert info.value.status == 404
 
 
 class TestWorkday:

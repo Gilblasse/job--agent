@@ -168,13 +168,17 @@ class HttpFetcher:
             if now < state.next_allowed:
                 time.sleep(state.next_allowed - now)
             state.next_allowed = time.monotonic() + self.min_interval
-        self._bump()
+        # Counted as traffic, because it is, but not charged to the source's allowance:
+        # the planner hands a source exactly ``budget`` boards, and charging the one
+        # robots.txt read against that allowance meant the last board was never reached
+        # -- every platform, every run, reported "1 more not reached within budget".
+        self._bump(charge=False)
 
-    def _bump(self) -> None:
+    def _bump(self, *, charge: bool = True) -> None:
         with self._counter_lock:
             self._requests += 1
         meter = getattr(self._local, "meter", None)
-        if meter is not None:
+        if charge and meter is not None:
             meter.record()
 
     @property

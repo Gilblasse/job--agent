@@ -8,6 +8,7 @@ from .ats.ashby import AshbyAdapter
 from .ats.base import AtsAdapter
 from .ats.greenhouse import GreenhouseAdapter
 from .ats.lever import LeverAdapter
+from .ats.workable import WorkableAdapter
 from .ats.workday import WorkdayAdapter
 from .base import SourceAdapter
 from .usajobs import UsaJobsAdapter
@@ -44,6 +45,12 @@ CATALOG: dict[str, SourceInfo] = {
         "Undocumented but keyless. Expensive: 20 per page, a second request per "
         "description. Where most large non-tech US employers post onsite roles.",
     ),
+    "workable": SourceInfo(
+        "workable", "ats", "P1",
+        "Keyless widget API, one request per tenant with descriptions. Publishes a "
+        "remote flag but not onsite-versus-hybrid, and no pay. Host robots.txt checked "
+        "live 2026-09-15: nothing disallowed.",
+    ),
     "usajobs": SourceInfo(
         "usajobs", "employer", "P1",
         "The federal government's own applicant system. Free instant key. Real "
@@ -59,11 +66,11 @@ EXCLUDED: dict[str, str] = {
         "systems only."
     ),
     "smartrecruiters": (
-        "P2, pending a robots.txt check: its API host is reported to disallow all "
-        "crawlers while the vendor documents the endpoint beneath it as a public "
-        "read-only API. Unresolved, so unshipped."
+        "Its API host's robots.txt, read live 2026-09-15, says 'Disallow: /' for every "
+        "agent and grants '/v1/companies/' to LinkedInBot alone. A carve-out for one "
+        "named bot makes the general refusal deliberate, so the boards stay seeded but "
+        "unread."
     ),
-    "workable": "P2, pending a robots.txt check. Real-world 429s observed at fan-out scale.",
     "jobvite": "No usable public feed; detail-page JSON-LD only, at one request per posting.",
     "join.com": "Public API requires a paid-plan token.",
 }
@@ -75,6 +82,7 @@ def ats_adapters() -> dict[str, AtsAdapter]:
         "lever": LeverAdapter(),
         "ashby": AshbyAdapter(),
         "workday": WorkdayAdapter(),
+        "workable": WorkableAdapter(),
     }
 
 

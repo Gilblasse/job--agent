@@ -1,0 +1,182 @@
+{
+ "name": "Acme Corp",
+ "description": "<p>Acme makes things.</p>",
+ "jobs": [
+  {
+   "title": "Accounts Payable Specialist",
+   "shortcode": "W1AAAA0001",
+   "code": "",
+   "employment_type": "Full-time",
+   "telecommuting": false,
+   "department": "Finance",
+   "url": "https://apply.workable.com/j/W1AAAA0001",
+   "shortlink": "https://apply.workable.com/j/W1AAAA0001",
+   "application_url": "https://apply.workable.com/j/W1AAAA0001/apply",
+   "published_on": "2026-07-28",
+   "created_at": "2026-06-12",
+   "country": "United States",
+   "city": "Dallas",
+   "state": "Texas",
+   "education": "",
+   "experience": "Mid level",
+   "function": "",
+   "industry": "Manufacturing",
+   "locations": [
+    {
+     "country": "United States",
+     "countryCode": "US",
+     "city": "Dallas",
+     "region": "Texas",
+     "hidden": false
+    }
+   ],
+   "description": "<p>Process vendor invoices and run the weekly payment cycle.</p>"
+  },
+  {
+   "title": "Accounts Payable Specialist",
+   "shortcode": "W1AAAA0001",
+   "code": "",
+   "employment_type": "Full-time",
+   "telecommuting": false,
+   "department": "Finance",
+   "url": "https://apply.workable.com/j/W1AAAA0001",
+   "shortlink": "https://apply.workable.com/j/W1AAAA0001",
+   "application_url": "https://apply.workable.com/j/W1AAAA0001/apply",
+   "published_on": "2026-07-28",
+   "created_at": "2026-06-12",
+   "country": "United States",
+   "city": "New York",
+   "state": "New York",
+   "education": "",
+   "experience": "Mid level",
+   "function": "",
+   "industry": "Manufacturing",
+   "locations": [
+    {
+     "country": "United States",
+     "countryCode": "US",
+     "city": "New York",
+     "region": "New York",
+     "hidden": false
+    }
+   ],
+   "description": "<p>Process vendor invoices and run the weekly payment cycle.</p>"
+  },
+  {
+   "title": "Motion Designer, Freelance (Remote)",
+   "shortcode": "W2BBBB0002",
+   "code": "",
+   "employment_type": "Contract",
+   "telecommuting": true,
+   "department": "Creative",
+   "url": "https://apply.workable.com/j/W2BBBB0002",
+   "shortlink": "https://apply.workable.com/j/W2BBBB0002",
+   "application_url": "https://apply.workable.com/j/W2BBBB0002/apply",
+   "published_on": "2026-08-01",
+   "created_at": "2026-07-30",
+   "country": "Spain",
+   "city": "Madrid",
+   "state": "Community of Madrid",
+   "education": "",
+   "experience": "",
+   "function": "",
+   "industry": "",
+   "locations": [
+    {
+     "country": "Spain",
+     "countryCode": "ES",
+     "city": "Madrid",
+     "region": "Community of Madrid",
+     "hidden": false
+    }
+   ],
+   "description": "<p>Animate short-form social content.</p>"
+  },
+  {
+   "title": "Motion Designer, Freelance (Remote)",
+   "shortcode": "W2BBBB0002",
+   "code": "",
+   "employment_type": "Contract",
+   "telecommuting": true,
+   "department": "Creative",
+   "url": "https://apply.workable.com/j/W2BBBB0002",
+   "shortlink": "https://apply.workable.com/j/W2BBBB0002",
+   "application_url": "https://apply.workable.com/j/W2BBBB0002/apply",
+   "published_on": "2026-08-01",
+   "created_at": "2026-07-30",
+   "country": "Portugal",
+   "city": "Lisbon",
+   "state": "Lisbon",
+   "education": "",
+   "experience": "",
+   "function": "",
+   "industry": "",
+   "locations": [
+    {
+     "country": "Portugal",
+     "countryCode": "PT",
+     "city": "Lisbon",
+     "region": "Lisbon",
+     "hidden": false
+    }
+   ],
+   "description": "<p>Animate short-form social content.</p>"
+  },
+  {
+   "title": "Project Manager",
+   "shortcode": "W3CCCC0003",
+   "code": "PM-7",
+   "employment_type": "Full-time",
+   "telecommuting": false,
+   "department": "Delivery",
+   "url": "https://apply.workable.com/j/W3CCCC0003",
+   "shortlink": "https://apply.workable.com/j/W3CCCC0003",
+   "application_url": "https://apply.workable.com/j/W3CCCC0003/apply",
+   "published_on": "2026-09-01",
+   "created_at": "2026-08-20",
+   "country": "United States",
+   "city": "Chicago",
+   "state": "Illinois",
+   "education": "",
+   "experience": "",
+   "function": "",
+   "industry": "",
+   "locations": [
+    {
+     "country": "United States",
+     "countryCode": "US",
+     "city": "Chicago",
+     "region": "Illinois",
+     "hidden": false
+    }
+   ],
+   "description": "<p>Run client projects end to end. This is a hybrid role, three days in the Chicago office.</p>",
+   "requirements": "<ul><li>PMP preferred</li></ul>",
+   "benefits": "<p>Medical, dental, 401k match.</p>"
+  },
+  "not a job",
+  {
+   "title": "Untitled draft with no identity",
+   "shortcode": "",
+   "url": "",
+   "shortlink": ""
+  },
+  {
+   "title": "Payroll Coordinator",
+   "shortcode": "W4DDDD0004",
+   "code": "",
+   "employment_type": "Part-time",
+   "telecommuting": false,
+   "department": "",
+   "url": "https://apply.workable.com/j/W4DDDD0004",
+   "shortlink": "https://apply.workable.com/j/W4DDDD0004",
+   "application_url": "https://apply.workable.com/j/W4DDDD0004/apply",
+   "published_on": "2026-09-03",
+   "created_at": "2026-09-03",
+   "country": "United States",
+   "city": "Plano",
+   "state": "Texas",
+   "description": "<p>Run the fortnightly payroll.</p>"
+  }
+ ]
+}

@@ -1,14 +1,10 @@
 #!/usr/bin/env bash
 # Live validation, to be run on an unrestricted network.
 #
-# This could not be run during development: the environment the tool was built in refuses
-# every job-source host at its egress proxy, so nothing below has ever executed against a
-# live endpoint. Everything up to this point is verified against replayed fixtures built
-# from vendor-documented schemas.
-#
-# Run this first on a real network. It checks the go/no-go gate, then runs the three
-# shipped example searches, then re-runs one to prove the new-versus-seen tracking works
-# against real data.
+# It checks the go/no-go gate, then runs the three shipped example searches, then re-runs
+# one to prove the new-versus-seen tracking works against real data. First run live on
+# 2026-09-14 (four adapters) and again on 2026-09-15 (five, with Workable); the results
+# are recorded in .agile/state.md and the README's coverage table.
 #
 #   ./scripts/live_validate.sh [output-file]
 #
@@ -23,7 +19,9 @@ DB="${JOBAGENT_DB:-$(mktemp -d)/live.sqlite3}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-if [ -d .venv ]; then . .venv/bin/activate; fi
+# A virtualenv puts its activate script under bin/ on POSIX and Scripts/ on Windows.
+if [ -f .venv/bin/activate ]; then . .venv/bin/activate
+elif [ -f .venv/Scripts/activate ]; then . .venv/Scripts/activate; fi
 
 log() { echo "$@" | tee -a "$REPORT"; }
 run() {

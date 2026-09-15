@@ -21,6 +21,7 @@ from jobagent.sources.ats.ashby import AshbyAdapter
 from jobagent.sources.ats.base import BoardTarget
 from jobagent.sources.ats.greenhouse import GreenhouseAdapter
 from jobagent.sources.ats.lever import LeverAdapter
+from jobagent.sources.ats.workable import WorkableAdapter
 from jobagent.sources.ats.workday import WorkdayAdapter
 from jobagent.sources.registry import seed_registry
 from jobagent.sources.usajobs import UsaJobsAdapter
@@ -39,6 +40,7 @@ ADAPTERS = [
     pytest.param(LeverAdapter(), id="lever"),
     pytest.param(AshbyAdapter(), id="ashby"),
     pytest.param(WorkdayAdapter(), id="workday"),
+    pytest.param(WorkableAdapter(), id="workable"),
 ]
 
 
@@ -73,16 +75,19 @@ def test_documented_fields_are_still_present(adapter, fetcher):
 
 
 def test_robots_policy_resolves_for_every_source_host(fetcher):
-    """No robots.txt was ever fetched during development. This is that check.
+    """Every shipped source's host must still permit us.
 
-    It asserts only that a policy can be RESOLVED, not that it permits us. A host that
-    disallows us is a real answer, and the right response is to stop shipping that
-    adapter -- which is why SmartRecruiters and Workable are currently held back.
+    A host that disallows us is a real answer, and the right response is to stop
+    shipping that adapter -- which is why SmartRecruiters is held back: its API host
+    says ``Disallow: /`` for everyone but LinkedInBot. Workable was held on the same
+    question until its host was read on 2026-09-15 and found to disallow nothing; this
+    test is what notices if that changes.
     """
     hosts = [
         "https://boards-api.greenhouse.io/v1/boards/stripe/jobs",
         "https://api.lever.co/v0/postings/netflix",
         "https://api.ashbyhq.com/posting-api/job-board/linear",
+        "https://apply.workable.com/api/v1/widget/accounts/huggingface",
         "https://data.usajobs.gov/api/search",
     ]
     verdicts = {}

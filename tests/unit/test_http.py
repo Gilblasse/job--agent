@@ -277,6 +277,19 @@ class TestRateLimiting:
             fetcher.get("https://example.com/api")
         assert fetcher.requests_made == 4  # three API calls plus one robots.txt
 
+    def test_the_robots_fetch_is_not_charged_to_a_source_allowance(self):
+        """The planner hands a source exactly ``budget`` boards, one request each.
+
+        Live, every platform reported "1 more not reached within this run's budget" on
+        every run: the robots.txt read had taken the last board's request.
+        """
+        fetcher = fetcher_with({**ALLOW_ALL, "/api": (200, "{}", {})})
+        with fetcher.usage() as meter:
+            for _ in range(3):
+                fetcher.get("https://example.com/api")
+            assert meter.used == 3
+        assert fetcher.requests_made == 4  # still counted as traffic
+
     def test_the_robots_fetch_is_itself_paced(self):
         client = StubClient({**ALLOW_ALL, "/api": (200, "{}", {})})
         fetcher = HttpFetcher(min_interval=0.05, client=client)
@@ -434,9 +447,10 @@ class TestPerSourceRequestMetering:
         for thread in threads:
             thread.join()
 
-        # Each source's own traffic plus its own robots fetch, and nobody else's.
-        assert seen["a"] == 3
-        assert seen["b"] == 6
+        # Each source's own board traffic and nobody else's. The robots fetch is
+        # counted globally, not against a source's allowance.
+        assert seen["a"] == 2
+        assert seen["b"] == 5
 
     def test_the_global_counter_still_sees_everything(self):
         client = StubClient({**ALLOW_ALL, "/api": (200, "{}", {})})

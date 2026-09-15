@@ -3,7 +3,8 @@
 **Product Goal:** a profession-agnostic CLI that finds jobs on employer ATS boards,
 filters them hard with stated reasons, and remembers what it has shown.
 
-**Status:** implemented and locally verified. **Not** validated against any live endpoint.
+**Status:** implemented, locally verified, and live-validated on a home network
+(2026-09-14 and 2026-09-15). Not yet validated through real user outcomes.
 
 **Depth:** Full — multi-component, external dependencies, new subsystem.
 **Mode:** autonomous scope; all six milestones delivered in one pass.
@@ -20,10 +21,11 @@ filters them hard with stated reasons, and remembers what it has shown.
 | M6 | Genericity proof, docs, live-validation handoff | done |
 | M7 | Registry growth: Common Crawl board discovery | done |
 | M8 | First live validation, and the defects it found | done |
+| M9 | Resolve the P2 robots holds: Workable ships, SmartRecruiters stays out | done |
 
 ## Verification evidence
 
-- 500 tests pass (`pytest -q`), plus 12 live tests deselected by default.
+- 515 tests pass (`pytest -q`), plus 14 live tests deselected by default.
   `ruff check src tests scripts` clean.
 - Genericity proven the hard way: one corpus, three unrelated searches, different correct
   answers, no code change. A test parses `src/` and fails on profession-specific terms in
@@ -32,6 +34,86 @@ filters them hard with stated reasons, and remembers what it has shown.
   board, missing credentials.
 - `sources doctor` was run against the real network here and failed honestly, naming the
   egress refusal per source rather than implying the sources were broken.
+
+## M9 — the P2 robots question, answered live, 2026-09-15
+
+Depth: Standard. Mode: autonomous, USAJOBS excluded by the user.
+
+Both P2 hosts' robots.txt were read from this network with the tool's own User-Agent:
+
+- `api.smartrecruiters.com`: `User-agent: *` / `Disallow: /`, with `Allow: /v1/companies/`
+  for `LinkedInBot` alone. The carve-out makes the refusal deliberate. **Stays unread**
+  (decision 28); its 287 boards remain seeded so `company list` shows the split.
+- `apply.workable.com`: `Disallow:` (empty), i.e. everything allowed. `www.workable.com`
+  disallows only `/admin`, `/auth/google`, `/user_password_resets`, `/j/`, and redirects
+  its API path to the apply host. **Workable ships** (decision 27).
+
+The adapter reads the widget API (`/api/v1/widget/accounts/{token}?details=true`), one
+request per tenant. Its fixture is the first in the suite shaped from a live capture
+rather than a documented schema. Two facts about the live shape drove the design:
+
+1. A job open in N cities comes back N times under one shortcode and URL. The adapter
+   folds them into one posting whose `location_raw` lists every city. Emitting them
+   separately would have given the deduper N postings with one identity, and whichever
+   city survived would decide whether a metro search saw the job.
+2. `telecommuting` is the only workplace field and it is a boolean: true → REMOTE, false
+   → UNKNOWN (not ONSITE; the description decides hybrid versus onsite).
+
+The fold exposed a `parse_location` defect that USAJOBS multi-location postings already
+had: scanning a semicolon-separated list for a spelled-out state found whichever state
+sorts first alphabetically and took everything before it as the city. It now structures
+the first place and keeps the whole list in `raw` (decision 29), pinned in
+`tests/unit/test_normalize.py`.
+
+Live, from this machine: `sources doctor` passed with five adapters and **1,479 routable
+boards** (was 1,307). The DFW search fanned out to all 172 Workable boards in 43 s, 162
+read, 10 dead tenants (404), 1,141 postings, no 429 — the "429s at fan-out scale" note in
+the old catalog entry did not reproduce at the standard per-host pace.
+
+Also this iteration: `scripts/live_validate.sh` finds the venv on Windows (`Scripts/`)
+as well as POSIX (`bin/`), and its header no longer claims it has never run. The Common
+Crawl question is drafted in `.agile/commoncrawl-question.md`, not sent — sending it is
+the user's call. Re-read today, `index.commoncrawl.org/robots.txt` still says
+`Disallow: /` but now lists explicit `Allow`s for `collinfo.json` and a few top-level
+files, none of them the `-index` query paths; decision 26 stands.
+
+Full live validation with the five adapters (`scripts/live_validate.sh`, report in the
+session scratchpad, not committed): gate passed; accounting 16,751 postings / 9 matches
+; React 19,567 / 35; DFW 20,162 / 4, the same four Dallas roles as M8. A baseline run of
+the same script at `2d153ef` the same morning (`live-validation-20260915-004603.txt`
+in the repo root, untracked, not mine) read 17,715 / 20,119 / 20,407 for the same
+9 / 35 / 4 matches: the fixed 400-request budget re-sliced across five platforms costs
+about 5% of postings read and no matches. Not a regression in matching. Workable: 727 postings from 47 boards, no matches in any of the three
+— agencies, studios and game companies, rejected with rule and quote.
+
+The DFW run, the only one that started after the budget fix landed, shows every
+platform reading exactly its planned board count ("61 boards read", "47 boards read")
+and no phantom shortfall; the two earlier runs in the same report still show it, having
+started before the edit. The script's final re-run of the accounting search reported
+10 matched, 2 new: dead boards found in run 1 sank in the fan-out order and live boards
+took their places (20,306 postings read against 16,751), so two matches came from boards
+never read before -- correct new-versus-seen behaviour, not a tracking defect. The
+baseline run's re-run showed the same board churn (19,108 against 17,715) and 0 new.
+
+That re-run exposed a third defect: the post-run "New matches (2)" table listed three
+jobs. It queried every job whose latest verdict was still flagged new, unscoped to the
+run, so a job first seen in run 1 and simply not re-read in run 4 appeared under run 4's
+heading. Fixed by scoping the query to the run; the regression test drives the CLI
+offline and was confirmed red without the fix.
+
+## Independent review — M9
+
+One pass, `feature-dev:code-reviewer`, collected. No blockers. Two MAJOR findings, both
+verification completeness rather than behaviour, both fixed: the live robots test still
+described Workable as held back and did not check `apply.workable.com` (now checked, and
+the docstring states the SmartRecruiters finding); and the fold's defensive branches
+(non-dict entry, entry with no identity, entry with no structured locations) had no
+fixture coverage (three entries and two tests added). The reviewer had no shell and
+reviewed from file state rather than `git diff`; it named the files it read.
+
+Running the live tests after that fix found something outside this iteration's scope:
+`data.usajobs.gov` publishes `Disallow: /`. Recorded under next actions; USAJOBS was
+excluded from this iteration by the user.
 
 ## M8 — first live run, 2026-09-14
 
@@ -162,16 +244,38 @@ deduplication and dead caching scaffolding.
 
 ## Next actions
 
-1. Run `./scripts/live_validate.sh` on an unrestricted network; read the gate result first.
-2. Resolve the two robots conflicts; ship SmartRecruiters and Workable only if clean.
-3. Record the real coverage of `pm-dfw-hybrid` in the README, whatever it turns out to be.
-4. Ask Common Crawl, on their public group, whether `Disallow: /` on the index host is
-   meant to cover clients of the documented CDX API. Their answer decides whether
-   `company discover` ships. Do not add a bypass in the meantime.
-5. Get a free USAJOBS key and run the DFW search again; federal roles are the one
-   onsite-metro source not yet exercised.
+1. **User:** send `.agile/commoncrawl-question.md` to the Common Crawl group. Their answer
+   decides whether `company discover` ships. No bypass in the meantime.
+2. **User, deferred by choice on 2026-09-15:** USAJOBS. Before getting a key, note that
+   `pytest -m live -k robots` found `data.usajobs.gov/robots.txt` says `Disallow: /`
+   (read 2026-09-15). The fetcher will refuse the API even with a key. Same question as
+   Common Crawl (decision 26): ask USAJOBS whether the file covers clients of the
+   documented, keyed API. No code was changed; the README's federal-coverage claim is
+   annotated as unverified.
+3. Registry growth is now the only lever left for reach. With Common Crawl held, the
+   routes are `company add` / `company import` from the user's own lists; nothing in the
+   backlog changes that without a cross-company index.
+4. Observation, not an action: SmartRecruiters' `Allow` for LinkedInBot suggests they
+   would consider named exceptions. Asking them is an external communication and the
+   user's call.
 
-## Retrospective
+## Retrospective — M9
+
+What worked: reading the robots files before writing a line of adapter code. The whole
+question that had held two platforms for a week was settled by two HTTP requests, and
+the answer was different for each — which the rumour-based notes had not predicted.
+
+What was found only by running live, again: the multi-city repetition in Workable's
+widget (no documentation mentions it), and the budget off-by-one, which had been in every
+coverage table since M8 and read as normal. **Improvement carried forward:** when a
+coverage table says the same odd thing for every source, that is a defect in the
+accounting, not a fact about the sources. Read the numbers, not just the verdict.
+
+Process note: a grep that dropped table continuation lines briefly made a still-present
+defect look fixed. Verifying against the raw report caught it; the lesson is to read the
+unfiltered evidence before claiming a fix is confirmed.
+
+## Retrospective — M1–M8
 
 What worked: writing the requirement classifier test table before the classifier. It
 caught the "Preferred Qualifications" heading bug immediately, which would have been

@@ -201,7 +201,10 @@ def run(
     console.print(Panel(outcome.summary(), title=f"Run {outcome.run_id}", border_style="green"))
 
     if outcome.new:
-        rows = store.results(search_id, only_new=True, limit=20)
+        # Scoped to THIS run. Without run_id the table listed every job whose latest
+        # verdict was still flagged new -- including ones first seen two runs ago on a
+        # board this run never reached -- under a heading that counted only this run's.
+        rows = store.results(search_id, only_new=True, run_id=outcome.run_id, limit=20)
         console.print(results_table(rows, title=f"New matches ({outcome.new})"))
         console.print(f"[dim]Full results: jobagent results {name}[/dim]")
     elif outcome.matched:

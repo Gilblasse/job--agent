@@ -137,8 +137,14 @@ def parse_location(raw: str, country_hint: str | None = None) -> Location:
     if not raw:
         return Location(raw="", country=(country_hint or None))
 
+    # A posting open in several places lists them semicolon-separated. The first is the
+    # one that becomes the structured city and region; scanning the whole list found
+    # whichever state sorts first alphabetically and took everything before it as the
+    # city. ``raw`` keeps every place, which is what the location gate reads.
+    primary = raw.split(";")[0].strip()
+
     city = region = None
-    match = _CITY_STATE.search(raw)
+    match = _CITY_STATE.search(primary)
     if match and match.group(2) in _STATE_ABBREVS:
         city = match.group(1).strip()
         region = match.group(2)
@@ -147,9 +153,9 @@ def parse_location(raw: str, country_hint: str | None = None) -> Location:
         # Spelled-out state names are folded to their abbreviation so that "Dallas, TX"
         # and "Dallas, Texas" produce the same region and therefore the same identity.
         for name, abbrev in US_STATES.items():
-            if find_phrase(raw.lower(), name):
+            if find_phrase(primary.lower(), name):
                 region = abbrev
-                head = raw.lower().split(name)[0].strip(" ,")
+                head = primary.lower().split(name)[0].strip(" ,")
                 if not city and head and len(head) < 60:
                     city = head.title()
                 break
@@ -161,7 +167,7 @@ def parse_location(raw: str, country_hint: str | None = None) -> Location:
         country = "US"
 
     if not city and not region:
-        head = raw.split(",")[0].strip()
+        head = primary.split(",")[0].strip()
         # "Remote" is a workplace arrangement, not a city; recording it as one would make
         # a city-level location gate match on the word "Remote".
         if head and not contains_phrase(head, "remote") and len(head) < 60:

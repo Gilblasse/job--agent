@@ -247,6 +247,43 @@ class TestDoctorTreatsUsajobsAsOptional:
         assert any("NOTE:" in line for line in describe(result))
 
 
+class TestPostRunTable:
+    def test_new_matches_after_a_run_are_that_runs_new_matches(self, db, monkeypatch):
+        """Live, a re-run headed "New matches (2)" listed three jobs.
+
+        The third had been new in the first run and was simply not re-read in the
+        second, because dead boards found in run one sank in the fan-out order and
+        different boards took their places. Its latest verdict was still flagged new,
+        so an unscoped query listed it under this run's heading.
+        """
+        from jobagent.cli import app as cli
+
+        board = fixture("greenhouse_board")
+        board["jobs"].append({
+            **board["jobs"][0], "id": 999, "title": "Accounts Payable Analyst",
+            "absolute_url": "https://boards.greenhouse.io/acme/jobs/999",
+        })
+
+        class Fetcher(FakeFetcher):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return None
+
+        # Only Greenhouse answers this time; Beta Inc's and Gamma LLC's boards are not
+        # read, so their run-one matches are neither new nor stale -- just not re-seen.
+        monkeypatch.setattr(
+            cli, "HttpFetcher",
+            lambda *a, **k: Fetcher(routes={"boards-api.greenhouse.io": board}),
+        )
+        out = invoke("run", "accounting-remote", "--db", db, "--quiet")
+        assert "New matches (1)" in out
+        assert "Accounts Payable Analyst" in out
+        assert "Junior Accountant" not in out
+        assert "Cash Management Analyst" not in out
+
+
 class TestBudgetOverride:
     def test_an_explicit_zero_budget_is_honoured(self, db):
         """Regression: a truthiness check silently substituted the saved budget."""

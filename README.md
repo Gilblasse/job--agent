@@ -28,7 +28,7 @@ in its registry.
 | Remote roles at tech and scale-up companies | **Good.** These employers live on Greenhouse, Lever and Ashby. |
 | Non-tech roles at those same employers (finance, HR, support, ops) | **Decent.** Their ATS boards carry every department, not just engineering. |
 | US federal roles, any occupation, any metro | **Good** via USAJOBS — but federal only. No state, city or private employers. |
-| Onsite or hybrid roles in a specific metro | **Thin.** Only what USAJOBS covers federally, plus whatever the registered Workday/Greenhouse/Lever/Ashby employers happen to advertise there. |
+| Onsite or hybrid roles in a specific metro | **Thin.** Only what USAJOBS covers federally, plus whatever the registered Workday/Greenhouse/Lever/Ashby/Workable employers happen to advertise there. |
 | Small local employers, agencies, hourly and shift work | **Poor.** These employers mostly do not run a public ATS board. |
 
 `examples/pm-dfw-hybrid.yml` is shipped precisely because it is the hardest case. Expect
@@ -38,10 +38,11 @@ few results. That is a fact about free job data, not a defect in the filter.
 own documentation — so discovery is fan-out over known employer boards. If a company is
 not in the registry, its jobs are not found.
 
-It ships seeded with 1,766 boards, of which **1,307 are searchable today** — the rest sit
-on SmartRecruiters and Workable, which are seeded but whose adapters are not shipped while
-a robots.txt question about them is unresolved. `jobagent company list` shows the split,
-and `jobagent sources doctor` counts only what a working adapter can actually read.
+It ships seeded with 1,766 boards, of which **1,479 are searchable today**. The other 287
+sit on SmartRecruiters, whose API host answers `robots.txt` with `Disallow: /` for every
+agent — and an explicit `Allow` for one named bot, which makes the refusal deliberate — so
+they are seeded but never read. `jobagent company list` shows the split, and
+`jobagent sources doctor` counts only what a working adapter can actually read.
 
 ### Growing the registry
 
@@ -59,7 +60,9 @@ rather than at the query API Common Crawl documents for programmatic use — but
 does not guess at intent, and it has no flag to override a robots file. It refuses, says
 why, and carries on. The feature stays in the codebase, tested, until Common Crawl says
 in so many words that API clients are not what the file means. That is the same posture
-that holds SmartRecruiters and Workable unshipped. What it would do, when allowed:
+that holds SmartRecruiters unshipped. (Workable was held on the same question until its
+hosts were read live on 2026-09-15: nothing disallowed, so it now ships.) What it would
+do, when allowed:
 
 ```bash
 jobagent company discover                  # sweep the Common Crawl index for boards
@@ -258,7 +261,7 @@ rather than promises:
 
 ## Verification status
 
-500 tests, all offline, run with `pytest`.
+515 tests, all offline, run with `pytest`.
 
 **Live-verified on 2026-09-14** from an ordinary home network, after being built in an
 environment that refused every job-source host:
@@ -285,8 +288,34 @@ roles in the metro, all four defensible, from 1,307 boards. Two example specs we
 tightened along the way: a bare "component" or "stakeholder" as a responsibility phrase
 matches nearly everything.
 
-Not yet run live: USAJOBS (needs a free key). `company discover` ran and was refused by
-Common Crawl's `robots.txt`; see above.
+**Second live pass, 2026-09-15**, with Workable added after its `robots.txt` was read
+clean. `scripts/live_validate.sh` ran end to end: the gate passed with five adapters and
+1,479 routable boards, and all three example searches ran again: accounting 16,751
+postings and 9 matches; React 19,567 and 35; Dallas–Fort Worth 20,162 and the same four
+hybrid/onsite roles in the metro as the day before. Workable's 727 postings from 47 boards
+matched none of the three — the seeded Workable employers are mostly agencies, studios and
+game companies, and the rejections say why, one rule and one quote at a time.
+
+That pass found two more defects, both fixed and pinned. A job open in several cities
+had its structured city read as "Dallas, Texas, United States;" because the parser
+scanned the whole list for a spelled-out state and found "New York" first — USAJOBS
+multi-location postings had the same problem. And the `robots.txt` read was being
+charged against each source's board allowance, so the last planned board on every
+platform was never reached, and every coverage table said so.
+
+One thing to know about budgets: `source_budget` in a spec is split across platforms in
+proportion to how many boards each has registered. Adding Workable's 172 boards to the
+registry did not add reach to a 400-request run; it re-sliced it. The same script run
+the same morning at the previous commit read 17,715 / 20,119 / 20,407 postings for the
+three searches; with Workable in the split it read 16,751 / 19,567 / 20,162, for the same
+9 / 35 / 4 matches. Raise the budget if you want both.
+
+Not yet run live: USAJOBS (needs a free key) — and the live robots test found on
+2026-09-15 that `data.usajobs.gov` publishes `Disallow: /`, so even with a key the tool
+will currently refuse it, exactly as it refuses SmartRecruiters and Common Crawl. Whether
+a keyed, documented API is what that file means is a question for USAJOBS; until then
+the "Good" federal coverage in the table above is unverified. `company discover` ran and
+was refused by Common Crawl's `robots.txt`; see above.
 
 `pytest -m live` holds tests that hit real endpoints. They are excluded by default so CI
 never depends on third-party uptime.
