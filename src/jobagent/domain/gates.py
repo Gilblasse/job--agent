@@ -325,49 +325,87 @@ def _as_heading(line: str) -> str:
     return " ".join(stripped.split()).lower()
 
 
+def _display_heading(line: str) -> str:
+    """A heading as the posting wrote it, minus its bullet and trailing colon."""
+    return " ".join(line.strip().lstrip("".join(_BULLET) + " ").rstrip(" :–—-").split())
+
+
+def _looks_like_heading(raw: str, known: set[str]) -> bool:
+    """A heading is a known section name, or short, unpunctuated, capitalised and not a
+    bullet. Bullets are checked on the raw line: a first version stripped the marker
+    first and then mistook every short bullet for a heading."""
+    reduced = _as_heading(raw)
+    if reduced in known:
+        return True
+    is_bullet = raw[:1] in _BULLET or raw[:2].rstrip(".)").isdigit()
+    words = reduced.split()
+    return (
+        not is_bullet and 1 <= len(words) <= 6 and raw[:1].isupper()
+        and not raw.endswith((".", ",", ";"))
+    )
+
+
+@dataclass(frozen=True)
+class Section:
+    """One part of a posting: its heading as written (None before the first heading) and
+    its lines, bullets and blank lines kept as they were."""
+
+    heading: str | None
+    lines: tuple[str, ...]
+
+    @property
+    def key(self) -> str:
+        return _as_heading(self.heading or "")
+
+
+def split_sections(text: str, taxonomy: Taxonomy) -> list[Section]:
+    """A posting cut at its own headings.
+
+    One rule decides where a section starts, and it serves two readers: the gates, which
+    need the part that describes the work, and the display, which shows the posting's
+    responsibilities, qualifications and benefits under the headings the employer used.
+    A posting with no headings is one unnamed section; nothing is invented.
+    """
+    if not text:
+        return []
+    known = {
+        h.lower() for h in (
+            taxonomy.responsibility_headings + taxonomy.requirement_headings
+            + taxonomy.preference_headings
+        )
+    }
+    sections: list[Section] = []
+    heading: str | None = None
+    body: list[str] = []
+    for line in text.split("\n"):
+        raw = line.strip()
+        if raw and _looks_like_heading(raw, known):
+            if heading is not None or any(part.strip() for part in body):
+                sections.append(Section(heading, tuple(body)))
+            heading, body = _display_heading(raw), []
+        else:
+            body.append(line)
+    if heading is not None or any(part.strip() for part in body):
+        sections.append(Section(heading, tuple(body)))
+    return sections
+
+
 def responsibility_text(text: str, taxonomy: Taxonomy) -> str | None:
     """The part of a posting that describes the work, or None when it has no such part.
 
     Everything from a responsibilities heading down to the next heading. Bounded by the
     next heading rather than a fixed window because a duties list can be three lines or
     thirty, and reading past it into "About us" is precisely the mistake being avoided.
-
-    A heading is a line that is either a known section name or short, unpunctuated,
-    capitalised and not a bullet. Bullets are checked on the raw line: a first version
-    stripped the marker first and then mistook every short bullet for a heading.
     """
     if not text:
         return None
     wanted = {h.lower() for h in taxonomy.responsibility_headings}
-    known = wanted | {
-        h.lower() for h in taxonomy.requirement_headings + taxonomy.preference_headings
-    }
-
-    lines = text.split("\n")
-    sections: list[str] = []
-    index = 0
-    while index < len(lines):
-        if _as_heading(lines[index]) not in wanted:
-            index += 1
-            continue
-        body: list[str] = []
-        index += 1
-        while index < len(lines):
-            raw = lines[index].strip()
-            reduced = _as_heading(raw)
-            is_bullet = raw[:1] in _BULLET or raw[:2].rstrip(".)").isdigit()
-            words = reduced.split()
-            looks_like_heading = reduced in known or (
-                not is_bullet and 1 <= len(words) <= 6 and raw[:1].isupper()
-                and not raw.endswith((".", ",", ";"))
-            )
-            if looks_like_heading:
-                break
-            body.append(lines[index])
-            index += 1
-        sections.append("\n".join(body))
-    joined = "\n".join(sections).strip()
-    return joined if sections else None
+    bodies = [
+        "\n".join(section.lines)
+        for section in split_sections(text, taxonomy)
+        if section.heading is not None and section.key in wanted
+    ]
+    return "\n".join(bodies).strip() if bodies else None
 
 
 @dataclass

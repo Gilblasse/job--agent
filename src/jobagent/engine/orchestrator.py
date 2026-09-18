@@ -90,18 +90,22 @@ def run_search(
     only_sources: list[str] | None = None,
     max_workers: int = 4,
     progress: RunProgress | None = None,
+    request_id: str | None = None,
 ) -> RunOutcome:
     """Execute a search and persist everything it learned.
 
     ``progress`` hears about each board read, each source finished and each job judged;
-    it is for display and nothing in the run depends on it.
+    it is for display and nothing in the run depends on it. ``request_id`` names the
+    request that asked for this run, when a publisher is running it for the web.
     """
     taxonomy = taxonomy or Taxonomy.default()
     today = today or date.today()
     now = now or datetime.now()
     progress = _Guarded(progress or NullProgress())
 
-    run_id = store.start_run(search_id, now)
+    run_id = store.start_run(
+        search_id, now, spec_yaml=spec.to_yaml(), request_id=request_id
+    )
     outcome = RunOutcome(run_id=run_id)
 
     plans = build_plans(spec, store, fetcher, today, only_sources)
@@ -159,7 +163,7 @@ def run_search(
         # Asked before the current verdict is written, so "new" means new to this search
         # rather than new to this run.
         is_new = not store.job_seen_by_search(job_id, search_id)
-        store.record_match(job_id, search_id, run_id, result, is_new)
+        store.record_match(job_id, search_id, run_id, result, is_new, job=job)
 
         matched = result.decision is Decision.MATCH
         if matched:

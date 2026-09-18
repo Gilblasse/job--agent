@@ -1,0 +1,46 @@
+# The runner for the web deployment.
+#
+# Every run of this workflow -- scheduled or woken by the API -- executes
+# `jobagent cloud run`, which takes the publisher lease, consumes whatever request is
+# queued in the database (or opens a scheduled one), runs every search and publishes
+# each as it finishes. It carries no inputs on purpose: the work lives in the database,
+# so a woken run that GitHub replaces with a scheduled one strands nothing, and nothing
+# from outside ever reaches a shell.
+#
+# One at a time, never cancelled: a cancelled publisher is what the lease and the
+# guarded batches exist to survive, so there is no reason to manufacture one.
+#
+# GitHub disables a schedule after 60 days without repository activity; a commit
+# re-enables it.
+
+name: Run searches
+
+on:
+  schedule:
+    - cron: "0 12 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: jobagent-run
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+      TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+      JOBAGENT_USAJOBS_KEY: ${{ secrets.JOBAGENT_USAJOBS_KEY }}
+      JOBAGENT_USAJOBS_EMAIL: ${{ secrets.JOBAGENT_USAJOBS_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+      - name: Run and publish
+        run: jobagent cloud run

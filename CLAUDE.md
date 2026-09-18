@@ -21,8 +21,19 @@ reach, and the request budget is the search strategy. Before changing discovery,
 
 - `domain/` is pure: no I/O, no network, no sqlite. Everything environmental goes behind a
   Protocol in `ports.py`.
-- **All network traffic goes through `infra/http.py`.** Adapters receive a `Fetcher`. Never
-  add a direct `httpx` call in an adapter; that would bypass robots and rate limiting.
+- **All job-source traffic goes through `infra/http.py`.** Adapters receive a `Fetcher`.
+  Never add a direct `httpx` call in an adapter; that would bypass robots and rate
+  limiting. The two exceptions are not sources: the user's own database
+  (`infra/turso.py`) and the wake-up call to the user's own CI (`web/dispatch.py`).
+  `tests/unit/test_http.py` names them; nothing else may join that list.
+- **`web/` is a second adapter over the same engine.** It imports `domain/`, `engine/`
+  and `infra/` (plus `cli/export.py`), never `cli/app`, and never evaluates a posting —
+  the runner does. Postings are rendered as text sections, never as HTML.
+- **Every cloud write group is a transaction, and every publish batch carries the lease
+  guard.** Use `Store._tx()` around related writes and `Store.guard_statements` at the
+  head of every batch the runner publishes. `docs/ARCHITECTURE.md` lists the seven
+  invariants of the web deployment; read them before touching `infra/store.py`,
+  `infra/publish.py` or `engine/cloud_run.py`.
 - **No profession may appear in executable code.** A test parses `src/` and fails on it.
   Docstrings may name a credential as an example; code may not.
 

@@ -318,10 +318,14 @@ class TestAdaptersCannotBypassTheChokepoint:
         from pathlib import Path
 
         root = Path(__file__).resolve().parents[2] / "src" / "jobagent"
+        # Not job sources, so not the fetcher's business: the user's own database and
+        # the wake-up call to the user's own CI. Nothing else may appear here.
+        not_sources = {Path("infra/turso.py"), Path("web/dispatch.py")}
         offenders = [
             path.relative_to(root)
             for path in root.rglob("*.py")
             if path.name != "http.py"
+            and path.relative_to(root) not in not_sources
             and any(
                 line.startswith(("import httpx", "import requests", "import urllib.request"))
                 or line.startswith(("from httpx", "from requests", "from urllib.request"))

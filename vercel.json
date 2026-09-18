@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "cd web && npm ci && npm run build",
+  "functions": {
+    "app.py": {
+      "excludeFiles": "{tests/**,docs/**,.agile/**,scripts/**,web/node_modules/**,web/src/**,*.txt}"
+    }
+  }
+}

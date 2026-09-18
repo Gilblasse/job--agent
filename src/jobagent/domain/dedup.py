@@ -213,3 +213,23 @@ def merge_job_sources(job: Job, others: list[Job]) -> Job:
                 job.sources.append(ref)
                 seen.add(key)
     return job
+
+
+def job_content_hash(job: Job) -> str:
+    """The hash of everything a stored job row carries about the posting.
+
+    Compared against the stored row's hash to tell "this posting changed" from "this
+    posting was read again": an unchanged posting costs no rewrite, and a verdict records
+    which version of the text it judged.
+    """
+    salary = job.salary
+    parts = [
+        job.title, job.company, job.url, job.description_text,
+        job.location.raw, job.location.city or "", job.location.region or "",
+        job.location.country or "", job.workplace.value, job.employment_type or "",
+        job.department or "",
+        "" if salary is None else
+        f"{salary.minimum}|{salary.maximum}|{salary.currency}|{salary.period}",
+        job.posted_at.isoformat() if job.posted_at else "", str(int(job.authority)),
+    ]
+    return content_hash("\x1f".join(parts))

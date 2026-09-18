@@ -16,10 +16,12 @@ dependencies = [
     "pydantic>=2.7",
     "questionary>=2.0",
     "PyYAML>=6.0",
+    "fastapi>=0.117",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.5"]
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.5", "uvicorn>=0.30"]
+e2e = ["pytest-playwright>=0.5"]
 
 [project.scripts]
 jobagent = "jobagent.cli.app:main"
@@ -31,8 +33,9 @@ packages = ["src/jobagent"]
 testpaths = ["tests"]
 markers = [
     "live: hits real third-party endpoints; excluded by default (run with -m live)",
+    "e2e: drives the built web app in a browser; excluded by default (run with -m e2e)",
 ]
-addopts = "-m 'not live'"
+addopts = "-m 'not live and not e2e'"
 
 [tool.ruff]
 line-length = 100
@@ -45,3 +48,5 @@ select = ["E", "F", "I", "UP", "B"]
 # Typer's API *requires* calling typer.Option/Argument in parameter defaults; B008 is a
 # false positive against that framework rather than a finding.
 "src/jobagent/cli/app.py" = ["B008"]
+# FastAPI's Depends() and Query() live in parameter defaults for the same reason.
+"src/jobagent/web/app.py" = ["B008"]

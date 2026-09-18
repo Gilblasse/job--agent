@@ -194,4 +194,74 @@ MIGRATIONS.append(
     )
 )
 
+
+MIGRATIONS.append(
+    (
+        4,
+        """
+        -- The web deployment. A search has an identity that outlives its row id (SQLite
+        -- reuses ids), a revision that every edit bumps, and each run records which
+        -- revision of which search it evaluated.
+        ALTER TABLE searches ADD COLUMN uid TEXT NOT NULL DEFAULT '';
+        UPDATE searches SET uid = lower(hex(randomblob(16))) WHERE uid = '';
+        CREATE UNIQUE INDEX idx_searches_uid ON searches(uid);
+        ALTER TABLE searches ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+
+        ALTER TABLE runs ADD COLUMN search_uid TEXT;
+        ALTER TABLE runs ADD COLUMN spec_revision INTEGER;
+        ALTER TABLE runs ADD COLUMN spec_yaml TEXT NOT NULL DEFAULT '';
+        ALTER TABLE runs ADD COLUMN request_id TEXT;
+        CREATE INDEX idx_runs_request ON runs(request_id);
+
+        -- What the run saw, frozen on the verdict: the fields a results screen lists
+        -- and sorts by, and the hash of the text that was judged. A later run may
+        -- rewrite the job row; the screen showing this run does not move.
+        ALTER TABLE job_search_matches ADD COLUMN title TEXT NOT NULL DEFAULT '';
+        ALTER TABLE job_search_matches ADD COLUMN company TEXT NOT NULL DEFAULT '';
+        ALTER TABLE job_search_matches ADD COLUMN location_raw TEXT NOT NULL DEFAULT '';
+        ALTER TABLE job_search_matches ADD COLUMN workplace TEXT NOT NULL DEFAULT 'unknown';
+        ALTER TABLE job_search_matches ADD COLUMN employment_type TEXT;
+        ALTER TABLE job_search_matches ADD COLUMN salary_min REAL;
+        ALTER TABLE job_search_matches ADD COLUMN salary_max REAL;
+        ALTER TABLE job_search_matches ADD COLUMN salary_currency TEXT;
+        ALTER TABLE job_search_matches ADD COLUMN salary_period TEXT;
+        ALTER TABLE job_search_matches ADD COLUMN posted_at TEXT;
+        ALTER TABLE job_search_matches ADD COLUMN url TEXT NOT NULL DEFAULT '';
+        ALTER TABLE job_search_matches ADD COLUMN content_hash TEXT NOT NULL DEFAULT '';
+
+        -- One row per request to run the searches. Also the queue: the partial unique
+        -- index means at most one request is ever waiting, whatever two browser tabs do.
+        CREATE TABLE run_requests (
+            id            TEXT PRIMARY KEY,
+            priority_uid  TEXT,
+            status        TEXT NOT NULL,
+            origin        TEXT NOT NULL,
+            lease_token   TEXT,
+            requested_at  TEXT NOT NULL,
+            started_at    TEXT,
+            finished_at   TEXT,
+            rows_written  INTEGER NOT NULL DEFAULT 0,
+            note          TEXT NOT NULL DEFAULT ''
+        );
+        CREATE UNIQUE INDEX idx_one_queued ON run_requests(status) WHERE status = 'queued';
+
+        -- The single publisher lease. Taking it overwrites the token, which is what makes
+        -- a takeover invalidate the previous owner: its heartbeat, its guard and its
+        -- finish all look for a token that is no longer there.
+        CREATE TABLE publish_lease (
+            singleton   INTEGER PRIMARY KEY CHECK (singleton = 1),
+            token       TEXT,
+            request_id  TEXT,
+            expires_at  TEXT NOT NULL DEFAULT ''
+        );
+        INSERT INTO publish_lease (singleton) VALUES (1);
+
+        -- Written as the first step of every publish batch with the number of valid
+        -- leases held by the writer's token. Zero violates the CHECK, and the whole
+        -- batch rolls back. A lost lease cannot write; that is the entire table.
+        CREATE TABLE publish_guard (ok INTEGER NOT NULL CHECK (ok = 1));
+        """,
+    )
+)
+
 SCHEMA_VERSION = MIGRATIONS[-1][0]

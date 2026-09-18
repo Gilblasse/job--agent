@@ -12,3 +12,6 @@ htmlcov/
 *.sqlite3
 *.db
 .jobagent/
+web/node_modules/
+web/dist/
+test-results/

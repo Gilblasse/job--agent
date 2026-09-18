@@ -23,7 +23,46 @@ filters them hard with stated reasons, and remembers what it has shown.
 | M8 | First live validation, and the defects it found | done |
 | M9 | Resolve the P2 robots holds: Workable ships, SmartRecruiters stays out | done |
 | M10 | Wizard: preview crash, scope-labelled prompts, flexible compounds, short-entry check | done, uncommitted |
-| M11 | Run progress bar, job ids and links in results, `dismiss` with reasons that teach the search | done, uncommitted |
+| M11 | Run progress bar, job ids and links in results, `dismiss` with reasons that teach the search | done |
+| M12 | Web version: Indeed-style search screen, FastAPI API on Vercel, Turso database, GitHub Actions runner | built, not yet deployed |
+
+## M12 — the web version, 2026-09-18
+
+Depth: Full. Plan file: `~/.claude/plans/lets-convert-this-cli-temporal-crown.md`, approved
+after four review passes that each rejected a draft on a correctness gap (batch atomicity,
+unfinished publishes leaking into results, search identity and revision, atomic lease
+takeover, one queued request by constraint, stable results under a pinned run). The
+seven invariants they produced are in `docs/ARCHITECTURE.md`, "The web deployment".
+
+Decided with the user: GitHub Actions runner + Vercel + Turso; Vite + React; a fresh
+cloud database; a single shared password; the Indeed-style layout.
+
+- **Store** (`infra/store.py`): explicit nesting-safe transactions on both backends;
+  migration 4 (search `uid` + `revision`, frozen verdict columns, `run_requests`,
+  `publish_lease`, `publish_guard`); run-scoped reads with frozen ordering and a
+  `count_results`; change detection by content hash with day-granularity `last_seen`
+  decided per job and per URL; batch helpers with the lease guard; retention by
+  availability. `record_match` now freezes the card fields on the verdict.
+- **Cloud connection** (`infra/turso.py`): Hrana over HTTP with conditional batches
+  (`COMMIT` on the last step's `ok`, `ROLLBACK` on its negation) and baton
+  transactions. Tested against an in-process Hrana server over sqlite3
+  (`tests/fakes.py::FakeHrana`) that implements the spec's step conditions.
+- **Runner** (`infra/publish.py`, `engine/cloud_run.py`, `jobagent cloud init|run`):
+  stateless; pulls searches and registry, runs the unchanged engine, publishes each run
+  as it finishes, heartbeats the lease every minute, and stops without reporting
+  success when it loses it.
+- **API** (`src/jobagent/web/app.py`): every endpoint tested once; a dismissal is one
+  transaction; a stale revision is a 409; an expired run is a 410 with the latest run.
+- **Web** (`web/`): the search screen, saved jobs, dismissed, sources & registry.
+- **Acceptance test** (`tests/e2e/test_search_flow.py`, `pytest -m e2e`): drives the
+  built app in Chromium against `scripts/e2e_server.py`, whose local dispatcher runs the
+  real runner path over the fixtures — queued → searching → newer results, a failed run,
+  an expired run — with no GitHub and no cloud.
+
+Verified offline: 717 tests and the acceptance test pass; `ruff` clean; `npm run build`
+clean. **Not yet verified:** anything against a real Turso database or Vercel — the
+`cloud init`, FK-cascade, atomic-batch, lease and "measure the budget" steps in the
+plan's verification section are the next actions, and they need the user's accounts.
 
 ## Verification evidence
 

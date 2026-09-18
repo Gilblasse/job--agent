@@ -15,29 +15,31 @@ from rich.table import Table
 from ..domain.feedback import (
     DismissRule,
     apply_rules,
+    complete_rules,
     describe,
     parse_rule,
     suggest_rules,
-    title_conflicts,
 )
 from ..domain.models import SourceStatus, UserStatus
 from ..domain.normalize import detect_seniority_levels
 from ..domain.spec import SearchSpec
 from ..domain.taxonomy import Taxonomy
+from ..engine.cloud_run import run_cloud
 from ..engine.doctor import run_doctor
 from ..engine.orchestrator import run_search
 from ..engine.verify import verify_jobs
 from ..infra.http import HttpFetcher
 from ..infra.store import DEFAULT_DB_PATH, Store
+from ..infra.turso import TursoConnection
 from ..sources.catalog import CATALOG, EXCLUDED, ats_adapters
-from ..sources.registry import add_from_url, import_csv, seed_registry
+from ..sources.registry import add_from_url, import_csv, load_seed_file, seed_registry
 from . import export as exporters
+from .export import load_explanation
 from .render import (
     actions_hint,
     coverage_table,
     doctor_table,
     job_panel,
-    load_explanation,
     results_table,
 )
 
@@ -51,9 +53,14 @@ app = typer.Typer(
 search_app = typer.Typer(no_args_is_help=True, help="Create and manage saved searches.")
 sources_app = typer.Typer(no_args_is_help=True, help="Inspect and check job sources.")
 company_app = typer.Typer(no_args_is_help=True, help="Manage the company board registry.")
+cloud_app = typer.Typer(
+    no_args_is_help=True,
+    help="Run the searches for the web deployment against the cloud database.",
+)
 app.add_typer(search_app, name="search")
 app.add_typer(sources_app, name="sources")
 app.add_typer(company_app, name="company")
+app.add_typer(cloud_app, name="cloud")
 
 DbOption = typer.Option(str(DEFAULT_DB_PATH), "--db", help="Path to the local database.")
 
@@ -415,7 +422,10 @@ def dismiss(
             console.print("[red]A reason is required: --reason 'why not jobs like this'.[/red]")
             raise typer.Exit(1)
         try:
-            rules = _rules_from_options(rule or [], row, spec, levels, taxonomy)
+            rules = complete_rules(
+                [parse_rule(text) for text in rule or []],
+                title=row["title"], company=row["company"], spec=spec, taxonomy=taxonomy,
+            )
         except ValueError as error:
             console.print(f"[red]{error}[/red]")
             raise typer.Exit(1) from None
@@ -426,10 +436,12 @@ def dismiss(
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(1) from None
 
-    if updated != spec:
-        store.save_spec(name, updated.to_yaml())
-    store.set_user_status(job_id, UserStatus.DISMISSED.value, reason)
-    store.record_feedback(job_id, search_id, reason, [r.as_dict() for r in rules])
+    # One transaction: the rule, the status and the reason land together or not at all.
+    with store._tx():
+        if updated != spec:
+            store.save_spec(name, updated.to_yaml())
+        store.set_user_status(job_id, UserStatus.DISMISSED.value, reason)
+        store.record_feedback(job_id, search_id, reason, [r.as_dict() for r in rules])
 
     console.print(f"[green]Dismissed:[/green] {row['title']} — {row['company']}")
     console.print(f"  [dim]because:[/dim] {reason}")
@@ -437,36 +449,6 @@ def dismiss(
         console.print(f"  - {describe(item)}")
     if updated != spec:
         console.print(f"[dim]Next run applies these rules: jobagent run {name}[/dim]")
-
-
-def _rules_from_options(
-    texts: list[str], row: Any, spec: SearchSpec, levels: list[tuple[str, str]],
-    taxonomy: Taxonomy,
-) -> list[DismissRule]:
-    """Complete --rule options from the job, and refuse the ones that would misfire."""
-    rules = [parse_rule(text) for text in texts] or [DismissRule("hide")]
-    completed: list[DismissRule] = []
-    for item in rules:
-        if item.kind == "employer":
-            item = DismissRule("employer", row["company"])
-        elif item.kind == "seniority" and not item.value:
-            if not levels:
-                raise ValueError(
-                    f"the title {row['title']!r} states no seniority level; "
-                    "name one: --rule seniority=LEVEL"
-                )
-            order = list(taxonomy.seniority)
-            highest = max(levels, key=lambda pair: order.index(pair[0]))[0]
-            item = DismissRule("seniority", highest)
-        elif item.kind == "title":
-            conflicts = title_conflicts(spec, item.value)
-            if conflicts:
-                raise ValueError(
-                    f"{item.value!r} also appears in a title you want "
-                    f"({', '.join(conflicts)}); make it more specific"
-                )
-        completed.append(item)
-    return completed
 
 
 def _job_summary(row: Any, levels: list[tuple[str, str]]) -> Panel:
@@ -877,6 +859,76 @@ def company_list(
     console.print(table)
     counts = store.registry_counts()
     console.print(f"[dim]{sum(counts.values())} healthy boards: {counts}[/dim]")
+
+
+# ----------------------------------------------------------------------------- cloud
+
+
+def open_cloud() -> tuple[str, str]:
+    """The cloud database's address and token, from the environment."""
+    import os
+
+    url = os.environ.get("TURSO_DATABASE_URL", "").strip()
+    token = os.environ.get("TURSO_AUTH_TOKEN", "").strip()
+    if not url or not token:
+        console.print(
+            "[red]Set TURSO_DATABASE_URL and TURSO_AUTH_TOKEN to reach the cloud database.[/red]"
+        )
+        raise typer.Exit(1)
+    if url.startswith("libsql://"):
+        url = "https://" + url[len("libsql://"):]
+    return url, token
+
+
+def _cloud_store(url: str, token: str) -> Store:
+    return Store.from_connection(TursoConnection(url, token))
+
+
+@cloud_app.command("init")
+def cloud_init() -> None:
+    """Create the cloud schema and load the bundled registry. Safe to repeat."""
+    url, token = open_cloud()
+    cloud = _cloud_store(url, token)
+    cloud.migrate()
+    now = datetime.now().isoformat()
+    rows = [
+        {
+            "company": row["company"], "domain": row.get("domain"), "ats": row["ats"],
+            "token": row["token"], "board_url": row.get("board_url", ""), "source": "seed",
+            "us_signal": int(bool(row.get("us_signal"))), "first_seen": now,
+            "last_verified": None, "last_success": None, "consecutive_failures": 0,
+            "last_failure_kind": "",
+            "notes": json.dumps(row.get("extra") or {}) if row.get("extra") else "",
+        }
+        for row in load_seed_file().get("companies") or []
+    ]
+    cloud.insert_registry_rows(rows)
+    counts = cloud.registry_counts()
+    console.print(
+        f"[green]Cloud database ready: {sum(counts.values())} boards registered.[/green]"
+    )
+
+
+@cloud_app.command("run")
+def cloud_run(
+    search: str | None = typer.Option(None, "--search", help="Run only this search."),
+    budget: int | None = typer.Option(None, "--budget", help="Override the board budget."),
+) -> None:
+    """Take the publisher lease, consume the waiting request, run and publish.
+
+    Carries no request id on purpose: whichever runner starts next consumes what is
+    queued, so a wake-up that GitHub replaced with a scheduled run strands nothing.
+    """
+    import os
+
+    url, token = open_cloud()
+    origin = "schedule" if os.environ.get("GITHUB_ACTIONS") == "true" else "local"
+    outcome = run_cloud(
+        _cloud_store(url, token), lambda: _cloud_store(url, token), HttpFetcher,
+        origin=origin, search=search, budget=budget,
+        log=lambda line: console.print(line, markup=False, highlight=False),
+    )
+    raise typer.Exit(outcome.exit_code)
 
 
 def main() -> None:

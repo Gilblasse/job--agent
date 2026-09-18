@@ -128,3 +128,38 @@ def describe(rule: DismissRule) -> str:
         "seniority": f"LEVEL: exclude seniority {value!r}",
         "hide": "hide this job only; no rule added",
     }[rule.kind]
+
+
+def complete_rules(
+    rules: list[DismissRule], *, title: str, company: str, spec: SearchSpec, taxonomy: Taxonomy
+) -> list[DismissRule]:
+    """Fill in the rules that take their value from the job, and refuse the ones that
+    would misfire.
+
+    ``employer`` takes the job's company; a bare ``seniority`` takes the title's highest
+    stated level; a ``title`` rule is refused when its phrase also sits inside a wanted
+    title, because excluding it would empty the search.
+    """
+    levels = detect_seniority_levels(title, taxonomy)
+    completed: list[DismissRule] = []
+    for item in rules or [DismissRule("hide")]:
+        if item.kind == "employer":
+            item = DismissRule("employer", company)
+        elif item.kind == "seniority" and not item.value:
+            if not levels:
+                raise ValueError(
+                    f"the title {title!r} states no seniority level; "
+                    "name one: seniority=LEVEL"
+                )
+            order = list(taxonomy.seniority)
+            highest = max(levels, key=lambda pair: order.index(pair[0]))[0]
+            item = DismissRule("seniority", highest)
+        elif item.kind == "title":
+            conflicts = title_conflicts(spec, item.value)
+            if conflicts:
+                raise ValueError(
+                    f"{item.value!r} also appears in a title you want "
+                    f"({', '.join(conflicts)}); make it more specific"
+                )
+        completed.append(item)
+    return completed

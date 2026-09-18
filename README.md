@@ -344,11 +344,67 @@ was refused by Common Crawl's `robots.txt`; see above.
 `pytest -m live` holds tests that hit real endpoints. They are excluded by default so CI
 never depends on third-party uptime.
 
+## Web version
+
+The same engine behind a search screen: filters on top, matching jobs on the left, the
+selected posting on the right, with "Why this matches your preferences" under it. It
+runs on free tiers only.
+
+```
+ browser ──► Vercel Hobby (React SPA + FastAPI, app.py) ──► Turso (libSQL, free)
+                 "Search jobs" queues a request and wakes the runner    ▲
+                                                                        │ publish
+             GitHub Actions (.github/workflows/run.yml) ────────────────┘
+             daily, plus wake-ups · `jobagent cloud run`
+```
+
+What to know before trusting it:
+
+- **"Search jobs" saves your rules and queues a run.** A search here is not a query
+  against an index; it is a rule set that a run evaluates over minutes of board fan-out.
+  The screen keeps showing one completed run, with its timestamp, until you accept
+  "Newer results are ready". "Waiting for an available runner" means exactly that.
+- **One runner at a time, proven per write.** The runner holds a lease in the database
+  and every batch it publishes checks it; a runner that lost its lease cannot write or
+  report success. Requests, runs and verdicts are only ever visible once complete.
+- **A screen is pinned to one run.** The fields it lists and sorts by are frozen on the
+  verdict, so a later run cannot move the page under you. A search's latest three runs
+  stay readable; older ones answer "Results expired — show latest". The posting body is
+  the current text, and the detail says so when the evaluated version differed.
+- **Rejected verdicts are kept for the latest three runs;** match verdicts are kept for
+  good (that is what "new" is measured against). Jobs unseen for 60 days that you never
+  saved, applied to or dismissed are removed.
+- **Editing a search bumps its revision.** Two tabs cannot silently overwrite each
+  other, and results show "Rules changed since these results" when they were.
+
+Setup, once:
+
+1. Turso: `turso db create jobagent`, then `turso db show jobagent --url` and
+   `turso db tokens create jobagent`.
+2. `TURSO_DATABASE_URL=... TURSO_AUTH_TOKEN=... jobagent cloud init` — schema plus the
+   bundled registry.
+3. GitHub: repository secrets `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` (and the
+   optional USAJOBS pair). A fine-grained token with *Actions: read and write* on this
+   repository lets the site wake the runner; without it, requests wait for the daily run.
+4. Vercel: import the repository (the FastAPI preset finds `app.py`; the build runs
+   `npm run build` in `web/`). Environment: `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`,
+   `JOBAGENT_WEB_PASSWORD`, `JOBAGENT_GITHUB_TOKEN`, `JOBAGENT_GITHUB_REPO`.
+
+Two facts about GitHub: it disables a schedule after 60 days without repository
+activity, and Actions runners use shared IP ranges — the doctor gate inside
+`cloud run` says whether the boards can be read from there, every run.
+
+Locally, with no cloud at all: `cd web && npm ci && npm run build && cd ..`, then
+`python scripts/e2e_server.py` and open http://127.0.0.1:8000 (password `e2e`). It seeds
+a demo database from the fixtures and answers "Search jobs" by running the real runner
+path in-process; that is also what the acceptance test (`pytest -m e2e`) drives.
+
 ## Data and privacy
 
-Everything is local: one SQLite file at `~/.jobagent/jobagent.sqlite3`. Nothing is
-uploaded, no account is needed, and no telemetry is sent. Your searches and the jobs you
-mark stay on your machine.
+The command line keeps everything local: one SQLite file at
+`~/.jobagent/jobagent.sqlite3`. Nothing is uploaded, no account is needed, and no
+telemetry is sent. The web version keeps the same tables in your own Turso database,
+behind a password you set; nothing else sees them.
 
 ## Attribution
 

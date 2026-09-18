@@ -11,7 +11,14 @@ import io
 import json
 from typing import Any
 
-from .render import load_explanation
+
+def load_explanation(row: Any) -> dict[str, Any]:
+    """The stored verdict as a dict; empty when a row has none."""
+    try:
+        return json.loads(row["explanation"])
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError):
+        return {}
+
 
 COLUMNS = [
     "id", "title", "company", "location", "workplace", "employment_type",

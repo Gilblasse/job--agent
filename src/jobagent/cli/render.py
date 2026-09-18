@@ -7,7 +7,6 @@ uncertainty visible rather than rounding it away.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from rich.console import Console
@@ -255,10 +254,3 @@ def doctor_table(result: DoctorResult) -> list[Any]:
 def _clip(text: str, width: int = 110) -> str:
     text = " ".join((text or "").split())
     return text if len(text) <= width else text[: width - 3] + "..."
-
-
-def load_explanation(row: Any) -> dict[str, Any]:
-    try:
-        return json.loads(row["explanation"])
-    except (KeyError, TypeError, json.JSONDecodeError):
-        return {}

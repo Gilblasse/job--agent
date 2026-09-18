@@ -186,22 +186,100 @@ A run re-fetches. This is the most obvious efficiency work left. — `engine/pla
 
 ## Evolving beyond one machine
 
-Version 1 is local-first and free, and stays that way. The seams for anything larger are
-already in place, and none of it is built:
+Version 1 is local-first and free, and stays that way. The seams for anything larger were
+in place from the start; the web deployment below used them:
 
-| Step | What changes | What does not |
-|---|---|---|
-| Scheduled runs | a cron entry calling `run_search` | nothing |
-| Serverless execution | `run_search` takes its store, fetcher and clock as arguments already | the engine, the gates, the ranking |
-| Cloud database | a second `JobRepository` implementation | `domain/` and `engine/` |
-| Multiple users | a user column on `searches` and `user_job_status` | the search logic |
-| Web or mobile UI | a new adapter over the same engine | everything below `cli/` |
-| Distributed source workers | `SourceAdapter.discover` is already an isolated unit of work | the orchestrator's contract |
-| Notifications | a hook on the `is_new` computation, which already exists | the tracking model |
+| Step | What changes | What does not | Status |
+|---|---|---|---|
+| Scheduled runs | a GitHub Actions workflow calling `jobagent cloud run` | nothing | built |
+| Serverless execution | the API runs on Vercel; the fan-out runs on GitHub Actions | the engine, the gates, the ranking | built |
+| Cloud database | the same `Store` over `infra/turso.py` | `domain/` and `engine/` | built |
+| Web UI | `web/` and `src/jobagent/web/`, a second adapter over the same engine | everything below `cli/` | built |
+| Multiple users | a user column on `searches` and `user_job_status` | the search logic | not built |
+| Distributed source workers | `SourceAdapter.discover` is already an isolated unit of work | the orchestrator's contract | not built |
+| Notifications | a hook on the `is_new` computation, which already exists | the tracking model | not built |
 
 The load-bearing property is that `run_search` has no global state, no CLI dependency and
-no direct I/O — it receives a store, a fetcher and a clock. Moving it into a Lambda is a
+no direct I/O — it receives a store, a fetcher and a clock. Moving it elsewhere was a
 deployment question, not a rewrite.
+
+## The web deployment
+
+```
+ browser  ──►  Vercel Hobby ────────────────────────────►  Turso (libSQL, free)
+ React SPA     app.py → FastAPI (src/jobagent/web/)          POST /v2/pipeline (Hrana)
+ (web/dist)    Store over infra/turso.py (baton transactions)        ▲
+               POST /api/runs → queued row (unique) + wake-up         │ publish: atomic batches,
+                                                                      │   lease-guarded
+              GitHub Actions  .github/workflows/run.yml  ─────────────┘ pull: searches, registry
+              cron daily + wake-ups · `jobagent cloud run` (no inputs)
+              take lease → consume the queued request → pull → doctor
+              → per search: run_search → publish → retention
+```
+
+The measured facts that shaped it: a run touches ~20k jobs and writes ~20k verdict rows of
+~1.7 KB each in ~120k statements, so the engine cannot run statement-by-statement over
+HTTP, and page-based replica sync would cost ~150–200 MB per run against a 3 GB monthly
+quota. So the runner keeps nothing between runs: it pulls the searches and the registry
+into a scratch SQLite file, runs the unchanged engine, and publishes each run in batches
+of a few hundred statements.
+
+Seven invariants, each enforced in code and pinned by a test:
+
+1. **One writer per table.** The API writes `searches`, `user_job_status`,
+   `job_feedback`, `company_registry` inserts and the request queue; the runner writes
+   `runs`, `run_sources`, `jobs`, `job_sources`, `job_search_matches`, registry health,
+   the lease and the guard. — `infra/publish.py`
+2. **Exactly one publisher, and takeover invalidates the previous owner atomically.**
+   `publish_lease` is a single row; taking it overwrites the token in the same
+   transaction that closes the old owner's request. From then on the old runner's
+   heartbeat, every guard and its `finish_request` match zero rows. No reconciliation is
+   involved in correctness. — `Store.take_lease`, `tests/integration/test_lease.py`
+3. **Every cloud write group is atomic and lease-proven.** A publish batch is one Hrana
+   `batch` request whose steps are conditioned on the previous step's success, `COMMIT`
+   on the last and `ROLLBACK` on its negation; its first statements insert the number of
+   valid leases held by the writer's token into `publish_guard(ok CHECK (ok = 1))`. Zero
+   fails the CHECK and the whole batch rolls back. Short API-side groups (a dismissal:
+   rule, status and reason) are baton-based interactive transactions. —
+   `infra/turso.py`, `Store._tx`, `Store.guard_statements`
+4. **At most one queued request, by constraint.** A partial unique index on
+   `run_requests(status) WHERE status = 'queued'` makes "create or attach" atomic under
+   concurrent clicks. The workflow carries no inputs: every run consumes whatever is
+   queued, so a woken run that GitHub replaces with a scheduled one strands nothing. —
+   `Store.create_queued`, `Store.consume_request`
+5. **A results screen is pinned to one available run and cannot move.** Every read is
+   scoped to `m.run_id`; cards and ordering use fields frozen on the verdict row at
+   publish (never `jobs.*`), and every order ends with `m.id`. A search's latest three
+   completed runs are available and untouched by retention; an older one answers
+   `410 {expired, latest_run}`. The posting body is the current text, with a
+   "changed since it was evaluated" notice when the hash differs. — `Store.results`,
+   `Store.expire_runs`, `web/app.py`
+6. **Search identity cannot be reused.** `searches.uid` (uuid4, unique, immutable) is
+   what runs, requests and the runner carry; SQLite reuses row ids, so `id` is a local
+   join key only. Every edit bumps `revision`, and an update with a stale revision is
+   refused. — `Store.save_spec`, `Store.update_search`
+7. **Writes are counted, not assumed.** Every Hrana result carries `rows_written`; the
+   publish report sums them onto the request row, so the free-tier budget is measured on
+   the first live run rather than estimated.
+
+Retention: rejected verdicts of runs older than the available window are pruned, but
+only for jobs that have a verdict in a newer run, so a job not encountered again keeps
+its latest verdict and an old match can never resurface because a newer rejection was
+pruned. Match verdicts are never pruned. Jobs unseen for 60 days with no saved, applied
+or dismissed status, no feedback and no verdict in an available run are deleted.
+
+### The search screen
+
+"Search jobs" saves the rules (with the revision) and queues a request; it does not
+evaluate anything. The screen keeps showing one completed run, with its timestamp, until
+the user accepts "Newer results are ready". The URL carries the search, run, job, sort,
+decision and the number of rows loaded, so refresh, Back and returning from the employer's
+tab land in the same place. The top bar's controls are spec fields (`titles`,
+`locations`, `salary_min`, `workplace`, `employment_types`); "More filters" holds the
+rest in the wizard's sections and wording; "Active filters" are the non-default fields.
+Postings are rendered from the text the engine stored, cut at the posting's own headings
+by the same rule the gates use (`split_sections` in `domain/gates.py`); nothing is
+summarised or invented. Runs from an older revision of the search are flagged.
 
 ## Testing
 
