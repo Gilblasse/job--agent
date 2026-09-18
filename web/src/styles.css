@@ -280,11 +280,16 @@ label {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  max-width: 100%;
   background: var(--page);
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 4px 6px 4px 10px;
   color: var(--text);
+}
+.active-filters .tag .label {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .active-filters .tag button {
   min-height: 24px;

@@ -218,7 +218,7 @@ export default function SearchBar(props: Props) {
           <span>Active filters:</span>
           {chips.map((chip) => (
             <span key={chip.key} className="tag" data-testid="filter-chip">
-              {chip.label}
+              <span className="label">{chip.label}</span>
               <button type="button" aria-label={`Remove filter ${chip.label}`} onClick={() => setDraft(chip.clear(draft))}>
                 ×
               </button>
