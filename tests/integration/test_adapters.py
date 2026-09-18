@@ -600,3 +600,43 @@ class TestWorkdayQueriesEveryTerm:
                             only_sources=["workday"])
         sent = plans[0].request.targets[0].extra["search_text"]
         assert TERM_SEPARATOR.join(["Accountant", "Bookkeeper"]) == sent
+
+
+class TestProgressUnits:
+    """One call per unit of work actually done, so a bar can move as boards are read."""
+
+    def _request(self, fetcher, count, seen):
+        return DiscoveryRequest(
+            fetcher=fetcher, budget=50, on_unit=seen.append,
+            targets=[BoardTarget(company=f"C{i}", token=f"t{i}") for i in range(count)],
+        )
+
+    def test_each_board_read_reports_what_it_found(self):
+        seen: list[int] = []
+        fetcher = FakeFetcher(routes={"boards-api.greenhouse.io": fixture("greenhouse_board")})
+        GreenhouseAdapter().discover(self._request(fetcher, 2, seen))
+        assert seen == [3, 3]
+
+    def test_a_dead_board_is_still_a_unit_done(self):
+        seen: list[int] = []
+        GreenhouseAdapter().discover(self._request(FakeFetcher(), 2, seen))  # 404s
+        assert seen == [0, 0]
+
+    def test_boards_skipped_after_a_block_are_not_units(self):
+        """The display completes the remainder itself when the source finishes."""
+        seen: list[int] = []
+        fetcher = FakeFetcher(failures={"greenhouse": blocked("boards-api.greenhouse.io")})
+        GreenhouseAdapter().discover(self._request(fetcher, 3, seen))
+        assert seen == [0]
+
+    def test_usajobs_reports_one_unit_per_request(self, monkeypatch):
+        monkeypatch.setenv("JOBAGENT_USAJOBS_KEY", "k")
+        monkeypatch.setenv("JOBAGENT_USAJOBS_EMAIL", "u@example.com")
+        seen: list[int] = []
+        fetcher = FakeFetcher(routes={"data.usajobs.gov": fixture("usajobs_search")})
+        UsaJobsAdapter(max_pages=1).discover(
+            DiscoveryRequest(
+                terms=["a", "b"], locations=["x"], fetcher=fetcher, on_unit=seen.append
+            )
+        )
+        assert len(seen) == 2 and all(n > 0 for n in seen)

@@ -102,6 +102,13 @@ class Store:
         ).fetchone()
         return (int(row["id"]), row["spec_yaml"]) if row else None
 
+    def get_spec_by_id(self, search_id: int) -> tuple[str, str] | None:
+        """(name, spec_yaml) for a search id, or None if it was deleted."""
+        row = self.conn.execute(
+            "SELECT name, spec_yaml FROM searches WHERE id = ?", (search_id,)
+        ).fetchone()
+        return (row["name"], row["spec_yaml"]) if row else None
+
     def list_specs(self) -> list[sqlite3.Row]:
         return list(
             self.conn.execute(
@@ -328,7 +335,7 @@ class Store:
                        VALUES (?,?,?)
                        ON CONFLICT(job_id) DO UPDATE SET status=excluded.status,
                             changed_at=excluded.changed_at
-                       WHERE user_job_status.status NOT IN ('applied','saved')""",
+                       WHERE user_job_status.status NOT IN ('applied','saved','dismissed')""",
                     (job_id, UserStatus.CLOSED.value, when.isoformat()),
                 )
 
@@ -338,14 +345,23 @@ class Store:
         self, search_id: int, *, only_new: bool = False, decision: str | None = "match",
         statuses: list[str] | None = None, run_id: int | None = None,
         min_score: float | None = None, limit: int = 100, order: str = "score",
+        include_dismissed: bool = True,
     ) -> list[sqlite3.Row]:
         """Fetch the latest verdict per job for a search, with filters applied.
 
         Only the most recent match row per job is considered: re-running a search should
         revise what the user sees, not stack a new copy beside the old one.
+
+        ``include_dismissed`` defaults to True so exports and engine callers see
+        everything; the results screens pass False, because a job the user turned away
+        must not come back on the next run.
         """
         clauses = ["m.search_id = ?"]
         params: list[Any] = [search_id]
+
+        if not include_dismissed:
+            clauses.append("COALESCE(u.status, 'new') != ?")
+            params.append(UserStatus.DISMISSED.value)
 
         if decision:
             clauses.append("m.decision = ?")
@@ -386,6 +402,40 @@ class Store:
 
     def get_job(self, job_id: int) -> sqlite3.Row | None:
         return self.conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+
+    def latest_search_for_job(self, job_id: int) -> int | None:
+        """The search that most recently judged this job, if any has."""
+        found = self.conn.execute(
+            "SELECT search_id FROM job_search_matches WHERE job_id=? ORDER BY id DESC LIMIT 1",
+            (job_id,),
+        ).fetchone()
+        return int(found["search_id"]) if found else None
+
+    # ----------------------------------------------------------------- feedback
+
+    def record_feedback(
+        self, job_id: int, search_id: int | None, reason: str, rules: list[dict[str, str]]
+    ) -> int:
+        """Keep why a job was dismissed, with the rules the reason became."""
+        with self.conn:
+            cursor = self.conn.execute(
+                """INSERT INTO job_feedback (job_id, search_id, reason, rules_json, created_at)
+                   VALUES (?,?,?,?,?)""",
+                (job_id, search_id, reason, json.dumps(rules), datetime.now().isoformat()),
+            )
+        return int(cursor.lastrowid or 0)
+
+    def feedback(self, search_id: int) -> list[sqlite3.Row]:
+        """Every dismissal recorded against a search, newest first."""
+        return list(
+            self.conn.execute(
+                """SELECT f.*, j.title, j.company
+                   FROM job_feedback f JOIN jobs j ON j.id = f.job_id
+                   WHERE f.search_id = ?
+                   ORDER BY f.created_at DESC, f.id DESC""",
+                (search_id,),
+            )
+        )
 
     def job_source_refs(self, job_id: int) -> list[sqlite3.Row]:
         return list(

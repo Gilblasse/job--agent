@@ -22,7 +22,7 @@ console = Console()
 
 STATUS_STYLE = {
     "new": "bold green", "seen": "dim", "saved": "cyan", "applied": "bold blue",
-    "rejected": "red", "closed": "strike dim",
+    "rejected": "red", "closed": "strike dim", "dismissed": "dim",
 }
 
 SOURCE_STYLE = {
@@ -32,17 +32,30 @@ SOURCE_STYLE = {
 }
 
 
-def results_table(rows: list[Any], *, title: str, show_score: bool = True) -> Table:
+def results_table(
+    rows: list[Any], *, title: str, show_score: bool = True, links: bool = True
+) -> Table:
+    """The scan view.
+
+    The first column is the job's id, not a row number: ``show``, ``mark`` and
+    ``dismiss`` all take the id, and a numbering the user could not act on sent them to
+    the wrong job. The title is a terminal hyperlink where the terminal supports one,
+    and the Link column carries the plain URL for those that do not.
+    """
     table = Table(title=title, header_style="bold", expand=True, title_justify="left")
-    table.add_column("#", width=4, justify="right")
+    table.add_column("ID", width=6, justify="right")
     if show_score:
         table.add_column("Score", width=6, justify="right")
     table.add_column("Title", ratio=3, no_wrap=False)
     table.add_column("Employer", ratio=2)
     table.add_column("Where", ratio=2)
-    table.add_column("Status", width=8)
+    table.add_column("Status", width=10)
+    if links:
+        # Folded rather than truncated: an ellipsis makes the URL uncopyable, which
+        # defeats the column.
+        table.add_column("Link", ratio=3, overflow="fold")
 
-    for index, row in enumerate(rows, start=1):
+    for row in rows:
         status = row["user_status"]
         marks = []
         if row["is_new"]:
@@ -59,12 +72,22 @@ def results_table(rows: list[Any], *, title: str, show_score: bool = True) -> Ta
         if row["workplace"] and row["workplace"] != "unknown":
             where = f"{where} ({row['workplace']})"
 
-        cells = [str(index)]
+        url = row["url"] or ""
+        title_cell = Text(row["title"], style=f"link {url}") if url else Text(row["title"])
+
+        cells: list[Any] = [str(row["id"])]
         if show_score:
-            cells.append(f"{row['score']:.0f}")
-        cells += [row["title"], row["company"], where, label]
+            cells.append(str(round(row["score"])))
+        cells += [title_cell, row["company"], where, label]
+        if links:
+            cells.append(Text(url, style=f"link {url}") if url else Text("-"))
         table.add_row(*cells)
     return table
+
+
+def actions_hint() -> str:
+    """What the id column is for, printed under every results table."""
+    return "[dim]jobagent show <id>  ·  jobagent dismiss <id>  ·  jobagent mark <id> saved[/dim]"
 
 
 def explanation_panel(row: Any, explanation: dict[str, Any]) -> Panel:

@@ -59,6 +59,10 @@ class UserStatus(StrEnum):
     APPLIED = "applied"
     REJECTED = "rejected"
     CLOSED = "closed"
+    # The user turned the job away and said why. Its own value, not REJECTED: a gate
+    # rejects a job and the results command has a --rejected flag for those, so the
+    # user's action must never share that word.
+    DISMISSED = "dismissed"
 
 
 class VerificationState(StrEnum):

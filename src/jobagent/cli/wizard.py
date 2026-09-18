@@ -15,6 +15,7 @@ in a YAML file and run headlessly.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import questionary
@@ -31,17 +32,74 @@ STYLE = questionary.Style([
 ])
 
 
-def _list(prompt: str, *, help_text: str = "", default: str = "") -> list[str]:
+def _list(
+    prompt: str, *, help_text: str = "", default: str = "", clarify: str = ""
+) -> list[str]:
     """Ask for a comma-separated list.
 
     Free text rather than a fixed menu throughout: any menu of job titles or skills would
     encode a profession, and this tool must not have one.
+
+    With ``clarify`` (a description of where the list is matched), entries short enough
+    to be ordinary words are confirmed one by one before they are accepted.
     """
     message = prompt if not help_text else f"{prompt}\n  ({help_text})"
     answer = questionary.text(message, default=default, style=STYLE).ask()
     if answer is None:
         raise KeyboardInterrupt
+    entries = _split(answer)
+    return _clarify_short(entries, clarify) if clarify else entries
+
+
+def _split(answer: str) -> list[str]:
     return [part.strip() for part in answer.split(",") if part.strip()]
+
+
+# At or under this length an entry is as likely to be an everyday word as a name: a
+# two-letter language is also a verb, and a one-letter one turns up in "Plan C".
+_SHORT_ENTRY = 3
+
+
+def _clarify_short(entries: list[str], scope: str) -> list[str]:
+    """Confirm, rewrite or drop each entry short enough to hit ordinary prose.
+
+    A user typed a two-letter language and a one-letter one into a list that rules a job
+    out on any hit. Both are legal entries and both match common English wherever it
+    appears as a standalone word, so the search would have quietly lost good jobs and
+    the user would never have known why. Asking costs one question; guessing costs
+    matches.
+    """
+    short = [entry for entry in entries if len(entry) <= _SHORT_ENTRY]
+    if not short:
+        return entries
+
+    questionary.print(
+        f"  Short entries match {scope} wherever they stand alone as a word, ordinary\n"
+        "  sentences included. Tick the ones to keep exactly as typed; you will be asked\n"
+        "  to rewrite or drop the rest.",
+        style="yellow",
+    )
+    kept = questionary.checkbox(
+        "Keep as typed?", choices=[Choice(entry, checked=False) for entry in short],
+        style=STYLE,
+    ).ask()
+    if kept is None:
+        raise KeyboardInterrupt
+
+    result: list[str] = []
+    for entry in entries:
+        if entry not in short or entry in kept:
+            result.append(entry)
+            continue
+        replacement = questionary.text(
+            f"Replace '{entry}' with (the full name of the tool or language usually "
+            "works; blank drops it)",
+            style=STYLE,
+        ).ask()
+        if replacement is None:
+            raise KeyboardInterrupt
+        result.extend(_split(replacement))
+    return result
 
 
 def _confirm(prompt: str, default: bool = False) -> bool:
@@ -69,37 +127,71 @@ def run_wizard(existing: SearchSpec | None = None) -> SearchSpec:
     data["name"] = name.strip()
 
     # --- the work itself ---------------------------------------------------------
+    # Each question says where in the posting it looks, because that is the difference
+    # between a filter and a deal-breaker: a phrase in the company blurb is evidence
+    # about the company, not the job, and a live run showed a React search losing good
+    # matches to a backend stack mentioned in passing.
     questionary.print("\nThe role", style="bold")
+    questionary.print(
+        "Each filter reads one part of the posting: TITLE, DUTIES (the responsibilities\n"
+        "section, or the whole posting when there is none) or ANYWHERE (the entire posting,\n"
+        "company blurb included). Anything that rules a job out does so on a single hit,\n"
+        "so the wider the scope, the shorter and more deliberate the list should be.\n",
+        style="dim",
+    )
     data["titles"] = _list(
-        "Job titles you want", help_text="exactly as they would appear in a posting",
+        "Job titles you want",
+        help_text=(
+            "TITLE only, as it would appear in a posting. Type a compound with its hyphen "
+            "or space and the hyphenated, spaced and joined spellings are all found"
+        ),
         default=", ".join(data.get("titles", [])),
     )
     data["related_titles"] = _list(
         "Other titles you would accept",
-        help_text="roles that are the same work under a different name",
+        help_text="TITLE only; the same work under a different name",
         default=", ".join(data.get("related_titles", [])),
     )
     data["excluded_titles"] = _list(
         "Titles to exclude outright",
+        help_text="TITLE only; any of these in the title rules the job out",
         default=", ".join(data.get("excluded_titles", [])),
     )
     data["responsibilities_include"] = _list(
         "Duties the job should involve",
-        help_text="matched against the description, so a differently-titled role can still qualify",
+        help_text=(
+            "DUTIES; a differently-titled role still qualifies if its work matches. "
+            "Keep phrases specific: a bare 'component' matches 'one component of pay'"
+        ),
         default=", ".join(data.get("responsibilities_include", [])),
+        clarify="in the duties section",
     )
     data["responsibilities_exclude"] = _list(
         "Duties you do not want",
-        help_text="any mention of these rules the job out",
+        help_text=(
+            "DUTIES only: the work itself, not a stack listed in passing. One hit rules "
+            "the job out, so avoid short everyday words; 'go' matches 'go above and beyond'"
+        ),
         default=", ".join(data.get("responsibilities_exclude", [])),
+        clarify="in the duties section",
     )
     data["required_skills"] = _list(
         "Skills or tools the job must mention",
+        help_text=(
+            "ANYWHERE, matched as a name in your casing, so a capitalised tool name "
+            "will not match the same word used as a verb; a lower-case entry matches either"
+        ),
         default=", ".join(data.get("required_skills", [])),
+        clarify="anywhere in the posting",
     )
     data["excluded_skills"] = _list(
         "Skills or tools that rule a job out",
+        help_text=(
+            "ANYWHERE, as a name. One mention in the company blurb counts, so keep this "
+            "to true deal-breakers; a backend you would rather not touch belongs under duties"
+        ),
         default=", ".join(data.get("excluded_skills", [])),
+        clarify="anywhere in the posting",
     )
 
     # --- level -------------------------------------------------------------------
@@ -182,7 +274,10 @@ def run_wizard(existing: SearchSpec | None = None) -> SearchSpec:
     questionary.print("\nConstraints", style="bold")
     credentials = _list(
         "Credentials that should rule a job OUT when required",
-        help_text="a licence or certification; jobs that merely PREFER it are still kept",
+        help_text=(
+            "read in context: a licence or certification the posting REQUIRES rules it "
+            "out; jobs that merely prefer it are kept"
+        ),
         default=", ".join(r["term"] for r in data.get("excluded_requirements", [])),
     )
     data["excluded_requirements"] = [{"term": term, "when": "required"} for term in credentials]
@@ -193,8 +288,9 @@ def run_wizard(existing: SearchSpec | None = None) -> SearchSpec:
     )
     data["shift_exclude"] = _list(
         "Shifts or schedules you cannot work",
-        help_text="e.g. night shift, weekends, on-call",
+        help_text="ANYWHERE in the posting; e.g. night shift, weekends, on-call",
         default=", ".join(data.get("shift_exclude", [])),
+        clarify="anywhere in the posting",
     )
     data["needs_visa_sponsorship"] = _confirm(
         "Do you need visa sponsorship?", bool(data.get("needs_visa_sponsorship"))
@@ -205,8 +301,12 @@ def run_wizard(existing: SearchSpec | None = None) -> SearchSpec:
     )
     data["deal_breakers"] = _list(
         "Anything else that rules a job out",
-        help_text="free text; any mention rules the job out",
+        help_text=(
+            "ANYWHERE, including the company description; the widest filter here. "
+            "One mention rules the job out, so list only what you would never accept"
+        ),
         default=", ".join(data.get("deal_breakers", [])),
+        clarify="anywhere in the posting",
     )
 
     # --- employers ---------------------------------------------------------------
@@ -263,17 +363,30 @@ def _describe_gate(gate: Any) -> str:
     if name.startswith("requirement:"):
         term = name.split(":", 1)[1]
         return f"exclude jobs that REQUIRE {term} (jobs where it is preferred are kept)"
-    mapping = {
-        "title_excludes": f"exclude titles containing {getattr(gate, 'phrases', [])}",
-        "seniority_excludes": f"exclude seniority levels {getattr(gate, 'levels', [])}",
-        "workplace": f"only {[w.value for w in getattr(gate, 'allowed', [])]} roles",
-        "country": f"only jobs in {getattr(gate, 'allowed', [])}",
-        "relevance": "the job must match a wanted title or duty",
-        "excluded_content": f"exclude any mention of {getattr(gate, 'phrases', [])}",
-        "company_excludes": f"exclude employers {getattr(gate, 'companies', [])}",
-        "salary_floor": f"pay must be at least {getattr(gate, 'minimum', 0):,.0f}",
-        "freshness": f"posted within {getattr(gate, 'max_age_days', 0)} days",
-        "security_clearance": "exclude roles requiring a security clearance",
-        "sponsorship": "exclude roles that will not sponsor a visa",
+    # One description per gate, computed only for that gate. These used to be f-strings
+    # in a dict literal, so every description was evaluated for every gate: the
+    # workplace line read ``.value`` off the country gate's plain strings and crashed
+    # the wizard after the last question and before the search was saved.
+    mapping: dict[str, Callable[[], str]] = {
+        "title_excludes": lambda: f"exclude titles containing {gate.phrases}",
+        "seniority_excludes": lambda: f"exclude seniority levels {gate.levels}",
+        "workplace": lambda: f"only {[w.value for w in gate.allowed]} roles",
+        "country": lambda: f"only jobs in {gate.allowed}",
+        "location": lambda: f"only jobs located in {gate.places}",
+        "relevance": lambda: "the job must match a wanted title or duty",
+        "required_keywords": lambda: f"the posting must mention {gate.phrases}",
+        "required_skills": lambda: f"the posting must name the skills {gate.phrases}",
+        "required_credentials": lambda: f"the posting must mention {gate.phrases}",
+        "excluded_responsibilities": lambda: (
+            f"exclude jobs whose duties include {gate.phrases}"
+        ),
+        "excluded_skills": lambda: f"exclude any mention of the skills {gate.phrases}",
+        "excluded_content": lambda: f"exclude any mention of {gate.phrases}",
+        "company_excludes": lambda: f"exclude employers {gate.companies}",
+        "employment_type": lambda: f"only {gate.allowed} roles",
+        "salary_floor": lambda: f"pay must be at least {gate.minimum:,.0f} per {gate.period}",
+        "freshness": lambda: f"posted within {gate.max_age_days} days",
+        "sponsorship": lambda: "exclude roles that will not sponsor a visa",
     }
-    return mapping.get(name, name)
+    describe = mapping.get(name)
+    return describe() if describe else name

@@ -175,4 +175,23 @@ MIGRATIONS.append(
     )
 )
 
+MIGRATIONS.append(
+    (
+        3,
+        """
+        -- Why the user turned a job away, kept with the rules it produced, so a search's
+        -- exclusions stay explainable after the wizard's original answers are long gone.
+        CREATE TABLE job_feedback (
+            id          INTEGER PRIMARY KEY,
+            job_id      INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+            search_id   INTEGER REFERENCES searches(id) ON DELETE SET NULL,
+            reason      TEXT NOT NULL,
+            rules_json  TEXT NOT NULL DEFAULT '[]',
+            created_at  TEXT NOT NULL
+        );
+        CREATE INDEX idx_feedback_search ON job_feedback(search_id, created_at DESC);
+        """,
+    )
+)
+
 SCHEMA_VERSION = MIGRATIONS[-1][0]

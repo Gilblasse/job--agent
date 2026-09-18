@@ -91,36 +91,23 @@ class AtsAdapter(SourceAdapter):
                 skipped_for_budget += len(attempted) - len(outcomes)
                 break
             if blocked:
+                # Skipped, not read: no unit of work happened, so no progress is reported
+                # for it. The orchestrator's display completes the remainder when the
+                # source finishes.
                 outcomes.append(BoardOutcome(target, ok=False, failure_kind="host_blocked"))
                 continue
-            try:
-                found = self.fetch_board(fetcher, target, request.today)
-            except FetchError as error:
-                if error.blocked:
-                    # The host has stopped serving us. Every remaining board on this
-                    # platform lives behind the same hostname, so continuing would be
-                    # both futile and rude.
-                    blocked = True
-                    kind = "rate_limited" if error.status == 429 else "blocked"
-                    outcomes.append(BoardOutcome(target, ok=False, failure_kind=kind))
-                else:
-                    failures += 1
-                    # 404 means the tenant is gone and should count against the board;
-                    # a 5xx is the server having a bad day and should not.
-                    kind = "gone" if error.status in (404, 410) else "unavailable"
-                    outcomes.append(BoardOutcome(target, ok=False, failure_kind=kind))
-                continue
-            except Exception:  # noqa: BLE001 - a malformed board must not end the run
-                failures += 1
-                outcomes.append(BoardOutcome(target, ok=False, failure_kind="parse_error"))
-                continue
 
-            if found:
-                postings.extend(found)
-                outcomes.append(BoardOutcome(target, ok=True, count=len(found)))
-            else:
-                # Empty is not failure: a real board with nothing open right now.
-                outcomes.append(BoardOutcome(target, ok=True, count=0))
+            outcome, found = self._read_board(fetcher, target, request.today)
+            outcomes.append(outcome)
+            postings.extend(found)
+            if outcome.failure_kind in ("rate_limited", "blocked"):
+                blocked = True
+            elif not outcome.ok:
+                failures += 1
+            # Outside the read, so a fault in a progress display is never recorded
+            # against the board as a parse error.
+            if request.on_unit is not None:
+                request.on_unit(len(found))
 
         requests = meter.used if meter is not None else 0
         searched = sum(1 for o in outcomes if o.ok)
@@ -155,6 +142,28 @@ class AtsAdapter(SourceAdapter):
         )
         result.report.__dict__["outcomes"] = outcomes  # consumed by the orchestrator
         return result
+
+    def _read_board(
+        self, fetcher: Fetcher, target: BoardTarget, today: date | None
+    ) -> tuple[BoardOutcome, list[RawPosting]]:
+        """One board, with every way it can fail turned into an outcome."""
+        try:
+            found = self.fetch_board(fetcher, target, today)
+        except FetchError as error:
+            if error.blocked:
+                # The host has stopped serving us. Every remaining board on this
+                # platform lives behind the same hostname, so continuing would be
+                # both futile and rude.
+                kind = "rate_limited" if error.status == 429 else "blocked"
+            else:
+                # 404 means the tenant is gone and should count against the board;
+                # a 5xx is the server having a bad day and should not.
+                kind = "gone" if error.status in (404, 410) else "unavailable"
+            return BoardOutcome(target, ok=False, failure_kind=kind), []
+        except Exception:  # noqa: BLE001 - a malformed board must not end the run
+            return BoardOutcome(target, ok=False, failure_kind="parse_error"), []
+        # Empty is not failure: a real board with nothing open right now.
+        return BoardOutcome(target, ok=True, count=len(found)), list(found or [])
 
     def probe_targets(self) -> list[BoardTarget]:
         """Reference boards used by the go/no-go gate.

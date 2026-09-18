@@ -120,6 +120,11 @@ def _inflected(word: str) -> str:
     return re.escape(stem) + r"(?:s|es|ed|ing)?"
 
 
+# Where one word ends and the next begins inside a typed phrase. A hyphen counts, so the
+# user's "front-end" and "front end" compile to the same pattern.
+_WORD_JOIN = re.compile(r"[\s\-]+")
+
+
 def phrase_pattern(
     phrase: str, *, inflect: bool = False, match_case: bool = False
 ) -> re.Pattern[str]:
@@ -129,9 +134,12 @@ def phrase_pattern(
     "apply", "application" and "capacity", which would make an Accounts Payable search
     match essentially every posting ever written.
 
-    Internal whitespace is flexible so "cash management" still matches across a line
-    break, and a leading or trailing non-word character (as in "C++") drops the boundary
-    on that side, where a word boundary could never match.
+    Word joins are flexible in both directions: the phrase is split on whitespace AND
+    hyphens, and the words may be joined in the text by whitespace, a hyphen, a slash, or
+    nothing at all. So "front-end", "front end" and "frontend" are one phrase however the
+    user typed it, "cash management" still matches across a line break, and "e-commerce"
+    finds "ecommerce". A leading or trailing non-word character (as in "C++") drops the
+    boundary on that side, where a word boundary could never match.
 
     With ``inflect``, the final word also matches its common inflections. Only the final
     word is stemmed: in a phrase like "budget creation" it is the head noun that varies,
@@ -143,11 +151,11 @@ def phrase_pattern(
     shifts". A lower-case phrase is still matched case-insensitively, so the user's own
     casing decides, and nothing changes for anyone who did not ask.
     """
-    words = phrase.split()
+    words = [w for w in _WORD_JOIN.split(phrase) if w]
     tokens = [re.escape(t) for t in words]
     if inflect and tokens:
         tokens[-1] = _inflected(words[-1])
-    core = r"[\s\-/]+".join(tokens)
+    core = r"[\s\-/]*".join(tokens)
     left = r"\b" if re.match(r"\w", phrase) else ""
     right = r"\b" if re.search(r"\w$", phrase) else ""
     flags = 0 if match_case and any(c.isupper() for c in phrase) else re.IGNORECASE

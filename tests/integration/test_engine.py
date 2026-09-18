@@ -480,3 +480,121 @@ class TestDescriptionBorrowHandlesHtml:
         )
         job = resolve([bare, html_only], Taxonomy.default(), NOW)[0]
         assert "accounts payable" in job.description_text.lower()
+
+
+class RecordingProgress:
+    """Every hook call, in order, so a test can check what a display would hear."""
+
+    def __init__(self):
+        self.events: list[tuple] = []
+
+    def discovery_started(self, units):
+        self.events.append(("discovery_started", dict(units)))
+
+    def unit_done(self, source, found):
+        self.events.append(("unit_done", source, found))
+
+    def source_done(self, source, report):
+        self.events.append(("source_done", source, report.status))
+
+    def evaluation_started(self, total):
+        self.events.append(("evaluation_started", total))
+
+    def job_evaluated(self, matched, is_new):
+        self.events.append(("job_evaluated", matched, is_new))
+
+    def of(self, kind):
+        return [event for event in self.events if event[0] == kind]
+
+
+class TestProgress:
+    """What a run tells its display, and that the display cannot change the run."""
+
+    def _run(self, seeded, fetcher, progress):
+        spec = accounting_spec()
+        search_id = seeded.save_spec(spec.name, spec.to_yaml())
+        return run_search(
+            spec, seeded, fetcher, search_id=search_id, today=TODAY, now=NOW,
+            only_sources=["greenhouse", "lever", "ashby"], progress=progress,
+        )
+
+    def test_every_phase_is_reported_and_the_counts_agree(self, seeded, fetcher):
+        progress = RecordingProgress()
+        outcome = self._run(seeded, fetcher, progress)
+
+        assert progress.of("discovery_started") == [
+            ("discovery_started", {"greenhouse": 1, "lever": 1, "ashby": 1})
+        ]
+        units = progress.of("unit_done")
+        assert sorted(source for _, source, _ in units) == ["ashby", "greenhouse", "lever"]
+        assert sum(found for _, _, found in units) >= outcome.found
+        assert len(progress.of("source_done")) == 3
+
+        total = progress.of("evaluation_started")[0][1]
+        assert total == outcome.matched + outcome.rejected
+        judged = progress.of("job_evaluated")
+        assert len(judged) == total
+        assert sum(matched for _, matched, _ in judged) == outcome.matched
+        assert sum(is_new for _, matched, is_new in judged if matched) == outcome.new
+
+    def test_discovery_events_precede_evaluation_events(self, seeded, fetcher):
+        progress = RecordingProgress()
+        self._run(seeded, fetcher, progress)
+        kinds = [event[0] for event in progress.events]
+        assert kinds.index("evaluation_started") > max(
+            i for i, kind in enumerate(kinds) if kind == "source_done"
+        )
+
+    def test_a_faulty_display_does_not_change_the_run(self, seeded, fetcher):
+        """The hooks run inside the source workers, where an exception reads as the
+        source failing. A display bug must not empty the results."""
+        class Broken(RecordingProgress):
+            def unit_done(self, source, found):
+                raise RuntimeError("display bug")
+
+            def job_evaluated(self, matched, is_new):
+                raise RuntimeError("display bug")
+
+        outcome = self._run(seeded, fetcher, Broken())
+        assert outcome.matched > 0
+        assert all(r.status is SourceStatus.OK for r in outcome.coverage.reports)
+
+    def test_coverage_and_job_order_follow_the_plan_not_completion(self, seeded, monkeypatch):
+        """The first-planned source finishes last; the tables must not notice."""
+        import threading
+
+        from jobagent.engine import orchestrator
+        from jobagent.sources.ats.greenhouse import GreenhouseAdapter
+
+        release = threading.Event()
+        real = orchestrator.all_adapters()
+
+        class Slow(GreenhouseAdapter):
+            def discover(self, request):
+                release.wait(timeout=5)
+                return super().discover(request)
+
+        class Fast(type(real["lever"])):
+            def discover(self, request):
+                result = super().discover(request)
+                release.set()
+                return result
+
+        adapters = dict(real)
+        adapters["greenhouse"] = Slow()
+        adapters["lever"] = Fast()
+        monkeypatch.setattr(orchestrator, "all_adapters", lambda: adapters)
+
+        fetcher = FakeFetcher(routes={
+            "boards-api.greenhouse.io": fixture("greenhouse_board"),
+            "api.lever.co": fixture("lever_board"),
+            "api.ashbyhq.com": fixture("ashby_board"),
+        })
+        progress = RecordingProgress()
+        outcome = self._run(seeded, fetcher, progress)
+
+        done = [source for _, source, _ in progress.of("source_done")]
+        assert done.index("lever") < done.index("greenhouse")  # it really finished first
+        assert [r.source for r in outcome.coverage.reports] == ["greenhouse", "lever", "ashby"]
+        first = seeded.conn.execute("SELECT company FROM jobs ORDER BY id LIMIT 1").fetchone()
+        assert first["company"] == "Acme Corp"  # the greenhouse employer, planned first

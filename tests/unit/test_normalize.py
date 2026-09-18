@@ -232,12 +232,28 @@ class TestTitleLocationSuffixes:
 
     @pytest.mark.parametrize(
         "title", ["Accountant - Dallas, TX", "Accountant | Remote",
-                  "Accountant, Austin, Texas", "Accountant - Hybrid"],
+                  "Accountant, Austin, Texas", "Accountant - Hybrid",
+                  "Accountant - Remote - US", "Accountant - US", "Accountant, Austin TX",
+                  "Accountant - London, United Kingdom"],
     )
     def test_location_and_arrangement_suffixes_are_stripped(self, title):
         from jobagent.domain.normalize import normalize_title
 
         assert normalize_title(title) == "accountant"
+
+    def test_a_hyphenated_title_is_not_cut_at_its_own_hyphen(self):
+        """The suffix was matched from the left, so this became "front"."""
+        from jobagent.domain.normalize import normalize_title
+
+        assert normalize_title("Front-End Developer, Austin TX") == "front end developer"
+
+    def test_a_business_unit_that_names_a_state_is_kept(self):
+        """The whole tail must be the place. "Georgia Operations" is a team, and
+        stripping it offered "Analyst" as the title to exclude on dismissal."""
+        from jobagent.domain.normalize import normalize_title
+
+        assert normalize_title("Analyst - Georgia Operations") == "analyst georgia operations"
+        assert normalize_title("Analyst - Georgia") == "analyst"
 
     @pytest.mark.parametrize(
         "title", ["Accountant - Payroll", "Accountant - General Ledger",

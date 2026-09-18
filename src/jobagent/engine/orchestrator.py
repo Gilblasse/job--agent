@@ -11,9 +11,10 @@ coverage report, not an error.
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from functools import partial
 
 from ..domain.matching import evaluate
 from ..domain.models import (
@@ -28,7 +29,7 @@ from ..domain.models import (
 from ..domain.spec import SearchSpec, compile_gates
 from ..domain.taxonomy import Taxonomy
 from ..infra.store import Store
-from ..ports import Fetcher
+from ..ports import Fetcher, NullProgress, RunProgress
 from ..sources.catalog import all_adapters
 from .planning import build_plans
 from .resolve import resolve
@@ -53,6 +54,30 @@ class RunOutcome:
         )
 
 
+class _Guarded:
+    """A progress display that cannot break the run.
+
+    The hooks are called from inside the source workers, whose exceptions are read as
+    the source having failed. A bug in a progress bar would then mark every source
+    failed and empty the results, so display errors are dropped here: the run's output
+    is the product, the bar is not.
+    """
+
+    def __init__(self, inner: RunProgress):
+        self._inner = inner
+
+    def __getattr__(self, name: str):
+        hook = getattr(self._inner, name)
+
+        def call(*args, **kwargs):
+            try:
+                hook(*args, **kwargs)
+            except Exception:  # noqa: BLE001 - see class docstring
+                pass
+
+        return call
+
+
 def run_search(
     spec: SearchSpec,
     store: Store,
@@ -64,11 +89,17 @@ def run_search(
     now: datetime | None = None,
     only_sources: list[str] | None = None,
     max_workers: int = 4,
+    progress: RunProgress | None = None,
 ) -> RunOutcome:
-    """Execute a search and persist everything it learned."""
+    """Execute a search and persist everything it learned.
+
+    ``progress`` hears about each board read, each source finished and each job judged;
+    it is for display and nothing in the run depends on it.
+    """
     taxonomy = taxonomy or Taxonomy.default()
     today = today or date.today()
     now = now or datetime.now()
+    progress = _Guarded(progress or NullProgress())
 
     run_id = store.start_run(search_id, now)
     outcome = RunOutcome(run_id=run_id)
@@ -76,6 +107,10 @@ def run_search(
     plans = build_plans(spec, store, fetcher, today, only_sources)
     adapters = all_adapters()
     postings: list[RawPosting] = []
+
+    for plan in plans:
+        plan.request.on_unit = partial(progress.unit_done, plan.source)
+    progress.discovery_started({plan.source: plan.boards for plan in plans})
 
     # Sources run concurrently because they are independent and mostly I/O-bound. The
     # per-host limiter inside the fetcher keeps concurrency from becoming a burst: several
@@ -94,17 +129,28 @@ def run_search(
         report = result.report or SourceReport(source=plan.source, status=SourceStatus.OK)
         return plan.source, result.postings, report
 
+    # Handled in completion order so the display can say a source is done when it is,
+    # but gathered in plan order afterwards so the coverage table, the resolve order
+    # and therefore the job ids read the same every run.
+    results: dict[int, tuple[list[RawPosting], SourceReport]] = {}
     if plans:
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            for _source, found, report in pool.map(execute, plans):
-                postings.extend(found)
-                outcome.coverage.add(report)
+            futures = {pool.submit(execute, plan): index for index, plan in enumerate(plans)}
+            for future in as_completed(futures):
+                source, found, report = future.result()
+                results[futures[future]] = (found, report)
                 _record_board_health(store, report)
+                progress.source_done(source, report)
+    for index in sorted(results):
+        found, report = results[index]
+        postings.extend(found)
+        outcome.coverage.add(report)
 
     outcome.found = len(postings)
 
     jobs = resolve(postings, taxonomy, now)
     gates = compile_gates(spec)
+    progress.evaluation_started(len(jobs))
 
     for job in jobs:
         result = evaluate(job, spec, taxonomy, today, gates)
@@ -115,12 +161,14 @@ def run_search(
         is_new = not store.job_seen_by_search(job_id, search_id)
         store.record_match(job_id, search_id, run_id, result, is_new)
 
-        if result.decision is Decision.MATCH:
+        matched = result.decision is Decision.MATCH
+        if matched:
             outcome.matched += 1
             outcome.new += int(is_new)
             outcome.matches.append((job, result, is_new))
         else:
             outcome.rejected += 1
+        progress.job_evaluated(matched, is_new)
 
     outcome.matches.sort(key=lambda item: item[1].score, reverse=True)
 

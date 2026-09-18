@@ -22,10 +22,12 @@ filters them hard with stated reasons, and remembers what it has shown.
 | M7 | Registry growth: Common Crawl board discovery | done |
 | M8 | First live validation, and the defects it found | done |
 | M9 | Resolve the P2 robots holds: Workable ships, SmartRecruiters stays out | done |
+| M10 | Wizard: preview crash, scope-labelled prompts, flexible compounds, short-entry check | done, uncommitted |
+| M11 | Run progress bar, job ids and links in results, `dismiss` with reasons that teach the search | done, uncommitted |
 
 ## Verification evidence
 
-- 515 tests pass (`pytest -q`), plus 14 live tests deselected by default.
+- 604 tests pass (`pytest -q`), plus 14 live tests deselected by default.
   `ruff check src tests scripts` clean.
 - Genericity proven the hard way: one corpus, three unrelated searches, different correct
   answers, no code change. A test parses `src/` and fails on profession-specific terms in
@@ -34,6 +36,70 @@ filters them hard with stated reasons, and remembers what it has shown.
   board, missing credentials.
 - `sources doctor` was run against the real network here and failed honestly, naming the
   egress refusal per source rather than implying the sources were broken.
+
+## M11 — progress, links, dismiss, 2026-09-15
+
+Depth: Standard (plan approved with three review notes, all folded in). Plan file:
+`~/.claude/plans/no-but-instead-lets-vivid-lobster.md`.
+
+- **Progress** (`ports.RunProgress`, `cli/progress.py`): two phases by design
+  (decision 35). Hooks are called from worker threads, guarded in the orchestrator, and
+  `as_completed` drives the display while results are gathered in plan order. Verified
+  offline (hook counts agree with the outcome; plan order holds when the first source
+  finishes last; a broken display leaves every source OK) and live on a scratch DB
+  through the real `run` command under a non-TTY console.
+- **Results** (`cli/render.py`): ID column, hyperlinked title, folded Link column,
+  `--no-links`, hint line, Status widened to fit "dismissed", `-0` scores gone.
+- **Dismiss** (`domain/feedback.py`, `cli/dismiss.py`, `dismiss`, `dismissed`,
+  `results --all`, migration 3 `job_feedback`, `UserStatus.DISMISSED`): reason required,
+  rule chosen; title rules refused when they would also exclude a wanted title; bare
+  `seniority` takes the title's highest level. Verified offline (13 CLI tests including
+  the survive-a-rerun test the user asked for) and live: a real match dismissed with an
+  employer and a duty rule, listed by `dismissed`, hidden from `results`.
+- **Found on the way:** `normalize_title` cut hyphenated titles at their own hyphen when a
+  location suffix followed (decision 38). Fixed and pinned.
+
+Independent review (`feature-dev:code-reviewer`), collected. It reported one BLOCKER and
+one MAJOR, both in the rewritten `_strip_location_suffix`: "- US" / "- Remote - US"
+suffixes not stripped, and "Analyst - Georgia Operations" stripped to "Analyst". Both
+were checked against the pre-change code (`git show HEAD:` run side by side) and were
+**pre-existing behaviour, not regressions**: old and new normalised every named case
+identically, and the only behavioural change in that helper was the hyphenated-title
+fix. Reclassified MINOR (both cheap, and the second now feeds the dismiss title
+suggestion) and fixed: a tail is a place only when it is wholly an arrangement word,
+"US"/"United States", a state, a "City ST" pair, or an exact vocabulary entry. Eight
+cases added to `TestTitleLocationSuffixes`. Everything else the reviewer checked --
+display thread-safety, the guarded hooks, bar completion under early exits, SQL
+parameters, genericity, the absence of "rejected" from dismiss output -- was clean.
+
+Not verified: the bar's rendering in a real terminal (this session has no TTY). The user
+sees it on the next `run`.
+
+## M10 — the first real wizard session, 2026-09-15
+
+Depth: Light. The user ran `search create` for the first time and pasted the transcript.
+
+1. **The preview crashed after the last question, before saving.** `_describe_gate`
+   built one dict of f-strings for every gate, so the workplace line's `.value` ran
+   against the country gate's plain strings. Every wizard run hit it; no test covered
+   the wizard at all. Now lazy, one description per gate, every compiled gate described
+   in words (six had fallen through to their internal names), and a test that runs the
+   preview over a spec with every gate populated -- confirmed red on the old code.
+2. **Prompts now say where they look** -- TITLE, DUTIES or ANYWHERE -- with a legend at
+   the top of the role section. The user's transcript had backend stacks under "duties
+   you do not want" (right) and a frontend framework under "anything else that rules a
+   job out" (posting-wide; one blurb mention would lose the job). The genericity test
+   rejected the first draft for naming a library in a help string; the shipped wording
+   is neutral.
+3. **Compounds: "front-end", "front end" and "frontend" are one phrase** (decision 32).
+   The transcript listed six spellings of two titles.
+4. **Short entries are confirmed** (decision 33): the transcript had "go" and "c" in a
+   rule-out list. `tests/unit/test_text.py` is new and pins both the join behaviour and
+   why short words are wide.
+
+Self-reviewed only (Light depth); 538 tests, ruff clean. Not committed: the user has
+not asked. Two things the user should know before re-entering that search: "posted
+within 3 days" will be very thin, and the language names still need spelling out.
 
 ## M9 — the P2 robots question, answered live, 2026-09-15
 

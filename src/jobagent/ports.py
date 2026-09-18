@@ -12,6 +12,7 @@ cloud database, without rewriting the search logic.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Protocol, runtime_checkable
@@ -114,6 +115,10 @@ class DiscoveryRequest:
     since: date | None = None
     today: date | None = None  # injected so freshness logic is testable
     targets: list[Any] = field(default_factory=list)  # registry entries, for ATS fan-out
+    # Called once per unit of work finished -- a board read, a search request answered --
+    # with the number of postings it yielded. For progress display only; adapters must
+    # not depend on it being set.
+    on_unit: Callable[[int], None] | None = None
 
 
 @dataclass
@@ -141,3 +146,46 @@ class JobRepository(Protocol):
         self, job_id: int, search_id: int, run_id: int, result: MatchResult, is_new: bool
     ) -> None: ...
     def set_user_status(self, job_id: int, status: str, note: str = "") -> None: ...
+
+
+@runtime_checkable
+class RunProgress(Protocol):
+    """How a run reports what it is doing while it is doing it.
+
+    Called from the source worker threads as well as the main thread, so an
+    implementation must be thread-safe and must not touch the store.
+    """
+
+    def discovery_started(self, units: dict[str, int]) -> None:
+        """Fan-out is about to begin; ``units`` is each source's planned unit count."""
+
+    def unit_done(self, source: str, found: int) -> None:
+        """One unit of a source's work finished, yielding ``found`` postings."""
+
+    def source_done(self, source: str, report: SourceReport) -> None:
+        """A source finished, whatever its outcome."""
+
+    def evaluation_started(self, total: int) -> None:
+        """Every source has returned; ``total`` jobs are about to be judged."""
+
+    def job_evaluated(self, matched: bool, is_new: bool) -> None:
+        """One job judged."""
+
+
+class NullProgress:
+    """The default: a run that reports nothing, for scripts and tests."""
+
+    def discovery_started(self, units: dict[str, int]) -> None:
+        pass
+
+    def unit_done(self, source: str, found: int) -> None:
+        pass
+
+    def source_done(self, source: str, report: SourceReport) -> None:
+        pass
+
+    def evaluation_started(self, total: int) -> None:
+        pass
+
+    def job_evaluated(self, matched: bool, is_new: bool) -> None:
+        pass

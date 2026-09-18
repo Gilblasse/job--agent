@@ -5,14 +5,25 @@ from __future__ import annotations
 import json
 from datetime import date, datetime
 from pathlib import Path
+from typing import Any
 
 import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from ..domain.feedback import (
+    DismissRule,
+    apply_rules,
+    describe,
+    parse_rule,
+    suggest_rules,
+    title_conflicts,
+)
 from ..domain.models import SourceStatus, UserStatus
+from ..domain.normalize import detect_seniority_levels
 from ..domain.spec import SearchSpec
+from ..domain.taxonomy import Taxonomy
 from ..engine.doctor import run_doctor
 from ..engine.orchestrator import run_search
 from ..engine.verify import verify_jobs
@@ -21,7 +32,14 @@ from ..infra.store import DEFAULT_DB_PATH, Store
 from ..sources.catalog import CATALOG, EXCLUDED, ats_adapters
 from ..sources.registry import add_from_url, import_csv, seed_registry
 from . import export as exporters
-from .render import coverage_table, doctor_table, job_panel, load_explanation, results_table
+from .render import (
+    actions_hint,
+    coverage_table,
+    doctor_table,
+    job_panel,
+    load_explanation,
+    results_table,
+)
 
 console = Console()
 
@@ -188,12 +206,13 @@ def run(
 
     # There is deliberately no flag to disable robots checking. Shipping one would make
     # circumventing a site's stated wishes a supported feature of the tool.
-    with HttpFetcher() as fetcher:
-        with console.status(f"Searching for {name!r}..."):
-            outcome = run_search(
-                spec, store, fetcher, search_id=search_id,
-                today=date.today(), now=datetime.now(), only_sources=only,
-            )
+    from .progress import ConsoleProgress
+
+    with HttpFetcher() as fetcher, ConsoleProgress(console) as progress:
+        outcome = run_search(
+            spec, store, fetcher, search_id=search_id,
+            today=date.today(), now=datetime.now(), only_sources=only, progress=progress,
+        )
 
     if not quiet:
         console.print(coverage_table(store.run_sources(outcome.run_id)))
@@ -204,8 +223,12 @@ def run(
         # Scoped to THIS run. Without run_id the table listed every job whose latest
         # verdict was still flagged new -- including ones first seen two runs ago on a
         # board this run never reached -- under a heading that counted only this run's.
-        rows = store.results(search_id, only_new=True, run_id=outcome.run_id, limit=20)
+        rows = store.results(
+            search_id, only_new=True, run_id=outcome.run_id, limit=20,
+            include_dismissed=False,
+        )
         console.print(results_table(rows, title=f"New matches ({outcome.new})"))
+        console.print(actions_hint())
         console.print(f"[dim]Full results: jobagent results {name}[/dim]")
     elif outcome.matched:
         console.print(
@@ -249,6 +272,10 @@ def results(
     min_score: float | None = typer.Option(None, "--min-score"),
     limit: int = typer.Option(30, "--limit"),
     explain: bool = typer.Option(False, "--explain", help="Show the reasoning for each row."),
+    links: bool = typer.Option(True, "--links/--no-links", help="Show each job's URL."),
+    everything: bool = typer.Option(
+        False, "--all", help="Include jobs you have dismissed."
+    ),
 ) -> None:
     """Review what a search found."""
     store = open_store(db)
@@ -262,13 +289,17 @@ def results(
     rows = store.results(
         search_id, only_new=new, decision="rejected" if rejected else "match",
         statuses=statuses or None, min_score=min_score, limit=limit, order=sort,
+        include_dismissed=everything,
     )
     if not rows:
         console.print("[dim]Nothing to show for those filters.[/dim]")
         return
 
     label = "Rejected" if rejected else ("New matches" if new else "Matches")
-    console.print(results_table(rows, title=f"{label} — {name}", show_score=not rejected))
+    console.print(
+        results_table(rows, title=f"{label} — {name}", show_score=not rejected, links=links)
+    )
+    console.print(actions_hint())
 
     if explain:
         for row in rows:
@@ -286,13 +317,7 @@ def show(job_id: int, db: str = DbOption, search: str | None = typer.Option(None
         console.print(f"[red]No job {job_id}.[/red]")
         raise typer.Exit(1)
 
-    search_id = load_spec(store, search)[0] if search else None
-    if search_id is None:
-        found = store.conn.execute(
-            "SELECT search_id FROM job_search_matches WHERE job_id=? ORDER BY id DESC LIMIT 1",
-            (job_id,),
-        ).fetchone()
-        search_id = found["search_id"] if found else None
+    search_id = load_spec(store, search)[0] if search else store.latest_search_for_job(job_id)
 
     explanation = store.latest_explanation(job_id, search_id) if search_id else {}
     merged = dict(row)
@@ -314,7 +339,9 @@ def show(job_id: int, db: str = DbOption, search: str | None = typer.Option(None
 @app.command("mark")
 def mark(
     job_id: int,
-    status: str = typer.Argument(..., help="saved | applied | rejected | seen | closed"),
+    status: str = typer.Argument(
+        ..., help="saved | applied | rejected | seen | closed | dismissed"
+    ),
     db: str = DbOption,
     note: str = typer.Option("", "--note"),
 ) -> None:
@@ -329,6 +356,160 @@ def mark(
         raise typer.Exit(1)
     store.set_user_status(job_id, status, note)
     console.print(f"[green]Job {job_id} marked {status}.[/green]")
+
+
+@app.command("dismiss")
+def dismiss(
+    job_id: int,
+    db: str = DbOption,
+    search: str | None = typer.Option(
+        None, "--search", help="The search to teach. Defaults to the one that found the job."
+    ),
+    reason: str | None = typer.Option(
+        None, "--reason", help="Why you do not want jobs like this. Required."
+    ),
+    rule: list[str] | None = typer.Option(
+        None, "--rule",
+        help=(
+            "What the reason means for the next run: employer | title=PHRASE | "
+            "duty=PHRASE | skill=PHRASE | anywhere=PHRASE | seniority[=LEVEL] | hide. "
+            "Repeatable. Without --reason or --rule the questions are asked."
+        ),
+    ),
+) -> None:
+    """Turn a job away, say why, and teach the search so the next run applies it."""
+    store = open_store(db)
+    row = store.get_job(job_id)
+    if row is None:
+        console.print(f"[red]No job {job_id}.[/red]")
+        raise typer.Exit(1)
+
+    search_id = load_spec(store, search)[0] if search else store.latest_search_for_job(job_id)
+    if search_id is None:
+        console.print(
+            f"[red]No search has matched job {job_id} yet.[/red] Name one with --search."
+        )
+        raise typer.Exit(1)
+    found = store.get_spec_by_id(search_id)
+    if found is None:
+        console.print(f"[red]Search {search_id} no longer exists.[/red]")
+        raise typer.Exit(1)
+    name, spec = found[0], SearchSpec.from_yaml(found[1])
+
+    taxonomy = Taxonomy.default()
+    levels = detect_seniority_levels(row["title"], taxonomy)
+    console.print(_job_summary(row, levels))
+
+    interactive = reason is None and not rule
+    if interactive:
+        from .dismiss import ask_reason, ask_rules
+
+        try:
+            reason = ask_reason()
+            rules = ask_rules(spec, suggest_rules(row["title"], row["company"], taxonomy))
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Cancelled; nothing recorded.[/yellow]")
+            raise typer.Exit(130) from None
+    else:
+        if not reason or not reason.strip():
+            console.print("[red]A reason is required: --reason 'why not jobs like this'.[/red]")
+            raise typer.Exit(1)
+        try:
+            rules = _rules_from_options(rule or [], row, spec, levels, taxonomy)
+        except ValueError as error:
+            console.print(f"[red]{error}[/red]")
+            raise typer.Exit(1) from None
+
+    try:
+        updated = apply_rules(spec, rules, taxonomy)
+    except ValueError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(1) from None
+
+    if updated != spec:
+        store.save_spec(name, updated.to_yaml())
+    store.set_user_status(job_id, UserStatus.DISMISSED.value, reason)
+    store.record_feedback(job_id, search_id, reason, [r.as_dict() for r in rules])
+
+    console.print(f"[green]Dismissed:[/green] {row['title']} — {row['company']}")
+    console.print(f"  [dim]because:[/dim] {reason}")
+    for item in rules:
+        console.print(f"  - {describe(item)}")
+    if updated != spec:
+        console.print(f"[dim]Next run applies these rules: jobagent run {name}[/dim]")
+
+
+def _rules_from_options(
+    texts: list[str], row: Any, spec: SearchSpec, levels: list[tuple[str, str]],
+    taxonomy: Taxonomy,
+) -> list[DismissRule]:
+    """Complete --rule options from the job, and refuse the ones that would misfire."""
+    rules = [parse_rule(text) for text in texts] or [DismissRule("hide")]
+    completed: list[DismissRule] = []
+    for item in rules:
+        if item.kind == "employer":
+            item = DismissRule("employer", row["company"])
+        elif item.kind == "seniority" and not item.value:
+            if not levels:
+                raise ValueError(
+                    f"the title {row['title']!r} states no seniority level; "
+                    "name one: --rule seniority=LEVEL"
+                )
+            order = list(taxonomy.seniority)
+            highest = max(levels, key=lambda pair: order.index(pair[0]))[0]
+            item = DismissRule("seniority", highest)
+        elif item.kind == "title":
+            conflicts = title_conflicts(spec, item.value)
+            if conflicts:
+                raise ValueError(
+                    f"{item.value!r} also appears in a title you want "
+                    f"({', '.join(conflicts)}); make it more specific"
+                )
+        completed.append(item)
+    return completed
+
+
+def _job_summary(row: Any, levels: list[tuple[str, str]]) -> Panel:
+    facts = Table.grid(padding=(0, 2))
+    facts.add_column(style="dim", width=12)
+    facts.add_column(overflow="fold")  # the URL must stay whole and copyable
+    facts.add_row("Employer", row["company"])
+    facts.add_row("Location", row["location_raw"] or "-")
+    facts.add_row("Workplace", row["workplace"])
+    facts.add_row(
+        "Level", ", ".join(f"{label} ({word})" for label, word in levels) or "not stated"
+    )
+    facts.add_row("Department", row["department"] or "-")
+    facts.add_row("Link", f"[link={row['url']}]{row['url']}[/link]")
+    return Panel(facts, title=row["title"], border_style="cyan")
+
+
+@app.command("dismissed")
+def dismissed(name: str, db: str = DbOption) -> None:
+    """List the jobs you dismissed from a search, with your reasons and the rules added."""
+    store = open_store(db)
+    search_id, _ = load_spec(store, name)
+    rows = store.feedback(search_id)
+    if not rows:
+        console.print(f"[dim]Nothing dismissed from {name!r} yet.[/dim]")
+        return
+
+    table = Table(
+        title=f"Dismissed — {name}", header_style="bold", expand=True, title_justify="left"
+    )
+    table.add_column("ID", width=6, justify="right")
+    table.add_column("Title", ratio=2)
+    table.add_column("Employer", ratio=1)
+    table.add_column("Because", ratio=3)
+    table.add_column("Rules added", ratio=3)
+    table.add_column("When", width=10)
+    for row in rows:
+        rules = [DismissRule(r["kind"], r["value"]) for r in json.loads(row["rules_json"])]
+        table.add_row(
+            str(row["job_id"]), row["title"], row["company"], row["reason"],
+            "\n".join(describe(r) for r in rules) or "-", row["created_at"][:10],
+        )
+    console.print(table)
 
 
 @app.command("coverage")

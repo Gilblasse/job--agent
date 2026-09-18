@@ -129,8 +129,30 @@ working *do* fail the gate, because that is a broken source rather than an absen
 
 ```bash
 jobagent search create       # interactive
-jobagent run my-search
+jobagent run my-search       # a progress bar: boards read, postings found, then matches
 jobagent results my-search --new
+```
+
+Every results table starts with the job's **ID** and ends with its **link** (clickable in
+terminals that support hyperlinks, the plain URL everywhere; `--no-links` hides the
+column). The ID is what the other commands take:
+
+```bash
+jobagent show 1616                 # the whole job, every URL it was seen at, why it matched
+jobagent mark 1616 saved
+jobagent dismiss 1616              # "not jobs like this" -- asks why, then what to do about it
+```
+
+`dismiss` asks for your reason in your own words, keeps it with the job, and then asks
+what the reason means for the next run: never show this employer, exclude titles worded
+like this, exclude a duty, a skill, a phrase anywhere, or a seniority level -- or just
+hide the job. The rules you pick are added to the saved search and apply on the next
+`run`; the job itself stays hidden from `results` (use `--all` to see it), and
+`jobagent dismissed my-search` lists every reason you have given. The same thing without
+the questions, for scripts:
+
+```bash
+jobagent dismiss 1616 --reason "agency work" --rule employer --rule "duty=cold calling"
 ```
 
 No network, no keys, just to see what it does:
@@ -203,9 +225,11 @@ By default such jobs are **kept, marked `?`, and ranked lower**. Set
 | `search create [--from spec.yml]` | build a search, interactively or from YAML |
 | `search list / show / edit / export / delete` | manage saved searches |
 | `run <name> [--sources] [--budget]` | execute a search |
-| `results <name> [--new\|--rejected\|--saved\|--applied] [--explain]` | review |
+| `results <name> [--new\|--rejected\|--saved\|--applied] [--explain] [--all] [--no-links]` | review |
 | `show <job-id>` | one job in full, with every URL it was seen at |
-| `mark <job-id> saved\|applied\|rejected` | track where you stand |
+| `mark <job-id> saved\|applied\|rejected\|dismissed` | track where you stand |
+| `dismiss <job-id> [--reason] [--rule ...]` | say why not jobs like this; the search learns |
+| `dismissed <name>` | every reason you have given, and the rules it produced |
 | `coverage <name>` | which sources answered, and which did not |
 | `export <name> --format csv\|json\|md` | get the data out, reasoning included |
 | `verify <name>` | re-check whether saved jobs are still open |
@@ -261,7 +285,7 @@ rather than promises:
 
 ## Verification status
 
-515 tests, all offline, run with `pytest`.
+604 tests, all offline, run with `pytest`.
 
 **Live-verified on 2026-09-14** from an ordinary home network, after being built in an
 environment that refused every job-source host:

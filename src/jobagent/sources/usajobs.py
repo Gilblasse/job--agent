@@ -94,11 +94,9 @@ class UsaJobsAdapter(SourceAdapter):
                     failures.append("stopped at this run's request budget")
                     break
                 try:
-                    postings.extend(
-                        self._search(
-                            fetcher, key, email, term, location, request.since,
-                            request.today or date.today(),
-                        )
+                    batch = self._search(
+                        fetcher, key, email, term, location, request.since,
+                        request.today or date.today(),
                     )
                 except FetchError as error:
                     status, note = self.classify_failure(error)
@@ -111,6 +109,10 @@ class UsaJobsAdapter(SourceAdapter):
                             ),
                         )
                     failures.append(note)
+                    continue
+                postings.extend(batch)
+                if request.on_unit is not None:
+                    request.on_unit(len(batch))
 
         status = SourceStatus.OK if not failures else (
             SourceStatus.PARTIAL if postings else SourceStatus.UNAVAILABLE

@@ -142,6 +142,33 @@ what the onsite-metro case needs — so a budget, not zero. — `sources/ats/wor
 "audit"; words under five characters are left alone so "plus" does not start matching
 "plush". — `domain/text.py`
 
+**Word joins are flexible both ways.** A phrase is split on spaces and hyphens, and the
+words may be joined in the text by a space, a hyphen, a slash or nothing, so "front-end",
+"front end" and "frontend" are one phrase however the user typed the first two. The
+closed form typed cannot be split, so it matches only itself. — `domain/text.py`
+
+**A run reports progress in two phases.** While sources are read the bar counts boards
+and the line beneath counts postings found; the matches count appears only once every
+source has returned, because cross-source duplicates are merged before any job is judged
+and judging early would either double the work or produce a count that falls after the
+merge. The display hears about the run through `RunProgress` in `ports.py`, from worker
+threads, and is guarded so a display bug can never read as a source failure. Results are
+gathered in plan order whatever the completion order, so job ids and the coverage table
+are the same from run to run. — `engine/orchestrator.py`, `cli/progress.py`
+
+**Dismissal is a status of its own, and the reason is the record.** A dismissed job
+carries `dismissed`, never `rejected` -- a gate rejects, and `results --rejected` shows
+those -- and `record_match` never overwrites an existing status, so a dismissed job that
+matches again stays hidden. The reason is stored verbatim in `job_feedback`; the rule the
+user picked is what changes the search, because there is no model here to read the
+reason and guessing would delete wanted jobs. — `domain/feedback.py`, `cli/dismiss.py`
+
+**The wizard confirms short entries.** Anything three characters or under in a list that
+scans prose is put back to the user: a two-letter language is also a verb, and a
+one-letter one appears in "Plan C", and such a list rules a job out on a single hit.
+Lists read in context — credentials, companies, places — are not interrupted.
+— `cli/wizard.py`
+
 **Discovered boards are a month or two stale.** The Common Crawl index is a periodic
 snapshot, so a board opened last week is not in it. Accepted because the durable fact being
 harvested is *which employers have boards*, while live postings still come from the ATS

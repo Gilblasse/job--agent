@@ -591,12 +591,27 @@ class TestMigrationFromAnExistingInstall:
 
         store = Store(path)  # would raise "table already exists" if migrations re-ran
 
+        from jobagent.infra.schema import SCHEMA_VERSION
+
         assert [
             row["version"]
             for row in store.conn.execute(
                 "SELECT version FROM schema_migrations ORDER BY version"
             )
-        ] == [1, 2]
+        ] == list(range(1, SCHEMA_VERSION + 1))
+
+    def test_an_upgraded_database_can_record_feedback(self, tmp_path):
+        """Migration 3 lands on a database that predates it."""
+        path = tmp_path / "existing.sqlite3"
+        self._v1_database(path)
+        store = Store(path)
+
+        tables = {
+            row["name"] for row in store.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        assert "job_feedback" in tables
 
 
 class TestNewBoardCounting:

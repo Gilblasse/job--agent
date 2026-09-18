@@ -410,37 +410,91 @@ def normalize_title(title: str) -> str:
     """
     if not title:
         return ""
-    text = title.lower()
-    text = re.sub(r"[\(\[\{].*?[\)\]\}]", " ", text)
-    text = re.sub(r"\b(?:req|requisition|job|id)[\s#:-]*\w*\d+\w*\b", " ", text)
-    text = _strip_location_suffix(text)
+    text = title_core(title).lower()
     text = re.sub(r"[^\w\s+#]", " ", text)
     return collapse_whitespace(text)
 
 
+def title_core(title: str) -> str:
+    """The title without its qualifiers, in the user's own casing.
+
+    Drops bracketed asides, requisition ids and one trailing place or arrangement
+    suffix, and keeps everything else as written. This is what the tool offers back when
+    a user wants to exclude "titles like this one": the identity form from
+    ``normalize_title`` is lowercased and stripped of punctuation, which reads badly as
+    a rule.
+    """
+    if not title:
+        return ""
+    text = re.sub(r"[\(\[\{].*?[\)\]\}]", " ", title)
+    text = re.sub(
+        r"\b(?:req|requisition|job|id)[\s#:-]*\w*\d+\w*\b", " ", text, flags=re.IGNORECASE
+    )
+    text = _strip_location_suffix(text)
+    return collapse_whitespace(text).strip(" -–—|,:")
+
+
 # "Accountant - Dallas, TX", "Accountant | Remote", "Accountant, Austin TX"
-_LOCATION_SUFFIX = re.compile(
-    r"\s*[-–—|,]\s*(?:remote|hybrid|onsite|on-site|"
-    r"[a-z .']{2,30}(?:,\s*[a-z]{2}|,\s*[a-z .']{4,20})?)\s*$",
-    re.IGNORECASE,
-)
+_TITLE_SEPARATOR = re.compile(r"\s*[-–—|,]\s*")
+_PLACE_SHAPE = re.compile(r"^[A-Za-z .']{2,30}(?:,\s*[A-Za-z]{2}|,\s*[A-Za-z .']{4,20})?$")
+# "Dallas, TX" and "Austin TX": a place followed by a state abbreviation.
+_CITY_STATE_PAIR = re.compile(r"^[A-Za-z .']{2,30}?[,\s]\s*([A-Za-z]{2})$")
+_ARRANGEMENTS = {"remote", "hybrid", "onsite", "on-site"}
 
 
 def _strip_location_suffix(text: str) -> str:
-    """Remove one trailing place or work-arrangement qualifier from a title."""
-    candidate = _LOCATION_SUFFIX.sub("", text).strip()
-    tail = text[len(candidate):].strip(" -–—|,")
-    # Only strip when the tail actually names a place or arrangement; otherwise
-    # "Accountant - Payroll" would lose the part that distinguishes the role.
-    if not candidate or candidate == text.strip():
-        return text
-    if re.search(r"\b[a-z]{2}\b\s*$", tail) and "," in tail:
-        return candidate
-    if tail.lower() in {"remote", "hybrid", "onsite", "on-site"}:
-        return candidate
-    if detect_country(tail)[0] is not None:
-        return candidate
+    """Remove one trailing place or work-arrangement qualifier from a title.
+
+    Separators are tried from the right, so the qualifier is the LAST segment that
+    names a place. Matching from the left cut a hyphenated title at its own hyphen:
+    "Front-End Developer, Austin TX" became "Front", and every "Front-..." role at one
+    employer and place collapsed into a single identity.
+    """
+    separators = list(_TITLE_SEPARATOR.finditer(text))
+    for index in range(len(separators) - 1, -1, -1):
+        head = text[: separators[index].start()].strip()
+        tail = text[separators[index].end():].strip()
+        if not head or not tail or not _names_a_place(tail):
+            continue
+        # "London, United Kingdom" and "Dallas, TX" are one place in two segments. Take
+        # the segment before as well, but only when it is itself a place: "End
+        # Developer" before "Austin TX" is the role, not the city.
+        if index > 0:
+            previous = separators[index - 1]
+            between = text[previous.end(): separators[index].start()].strip()
+            wider = text[previous.end():].strip()
+            pair = _CITY_STATE_PAIR.match(wider)
+            if _names_a_place(between) or (pair and pair.group(1).upper() in _STATE_ABBREVS):
+                head = text[: previous.start()].strip()
+        return head or text
     return text
+
+
+def _names_a_place(tail: str) -> bool:
+    """Whether a title's trailing segment is a place or arrangement, not part of the role.
+
+    "Accountant - Payroll" must keep the part that distinguishes the role, so a tail
+    counts only when it is an arrangement word, a "City, ST" pair, or something the
+    place vocabulary recognises.
+    """
+    lowered = tail.lower()
+    if lowered in _ARRANGEMENTS or lowered in {"us", "usa", "united states"}:
+        return True
+    if not _PLACE_SHAPE.match(tail):
+        return False
+    pair = _CITY_STATE_PAIR.match(tail)
+    if pair and pair.group(1).upper() in _STATE_ABBREVS:
+        return True
+    if lowered in US_STATES:
+        return True
+    # The whole tail must be the place, not merely contain one: "Georgia Operations" is
+    # a business unit that happens to name a state, and stripping it would offer
+    # "Analyst" as the title to exclude when the user dismisses that job.
+    for vocabulary in (US_CITY_VOCAB, NON_US_VOCAB):
+        hit = vocabulary.find(tail)
+        if hit and hit[1] == (0, len(tail)):
+            return True
+    return False
 
 
 def build_job(
