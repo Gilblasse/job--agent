@@ -60,6 +60,9 @@ LEASE_SECONDS = 300
 RETENTION_DAYS = 60
 # Existing rows are read in groups of this many identities.
 LOOKUP_CHUNK = 250
+# Retention deletes this many rows per transaction, so a screen polling the same
+# database is never held out for long.
+DELETE_CHUNK = 2000
 
 Statement = tuple[str, Sequence[Any]]
 
@@ -117,8 +120,10 @@ class Store:
         # Transactions are explicit here (``_tx``), so the module's implicit ones are off.
         # check_same_thread is off because the web app serves requests from a thread
         # pool; the store is still used by one request at a time.
+        # A generous busy timeout: the web process runs the publisher in a thread of
+        # its own, and a status write must wait its turn rather than fail.
         self.conn: Any = sqlite3.connect(
-            str(self.path), isolation_level=None, check_same_thread=False
+            str(self.path), isolation_level=None, check_same_thread=False, timeout=30.0
         )
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
@@ -1343,18 +1348,24 @@ class Store:
         available = [int(row["id"]) for row in self.available_runs(search_id)]
         if len(available) < AVAILABLE_RUNS:
             return 0
-        with self._tx():
-            self._guarded(lease, now)
-            cursor = self.conn.execute(
-                """DELETE FROM job_search_matches WHERE id IN (
-                       SELECT m.id FROM job_search_matches m
-                       WHERE m.search_id = ? AND m.decision = 'rejected' AND m.run_id < ?
-                       AND EXISTS (SELECT 1 FROM job_search_matches n
-                                   WHERE n.job_id = m.job_id AND n.search_id = m.search_id
-                                   AND n.run_id > m.run_id))""",
-                (search_id, min(available)),
-            )
-            return int(cursor.rowcount)
+        deleted = 0
+        while True:
+            with self._tx():
+                self._guarded(lease, now)
+                cursor = self.conn.execute(
+                    """DELETE FROM job_search_matches WHERE id IN (
+                           SELECT m.id FROM job_search_matches m
+                           WHERE m.search_id = ? AND m.decision = 'rejected' AND m.run_id < ?
+                           AND EXISTS (SELECT 1 FROM job_search_matches n
+                                       WHERE n.job_id = m.job_id AND n.search_id = m.search_id
+                                       AND n.run_id > m.run_id)
+                           LIMIT ?)""",
+                    (search_id, min(available), DELETE_CHUNK),
+                )
+                batch = int(cursor.rowcount)
+            deleted += batch
+            if batch < DELETE_CHUNK:
+                return deleted
 
     def delete_stale_jobs(
         self, lease: Lease, now: datetime, *, days: int = RETENTION_DAYS
@@ -1366,16 +1377,23 @@ class Store:
             f" AND id NOT IN (SELECT job_id FROM job_search_matches WHERE run_id IN "
             f"({_placeholders(len(protected))}))" if protected else ""
         )
-        with self._tx():
-            self._guarded(lease, now)
-            cursor = self.conn.execute(
-                f"""DELETE FROM jobs WHERE last_seen < ?
-                    AND id NOT IN (SELECT job_id FROM user_job_status
-                                   WHERE status IN ('saved', 'applied', 'dismissed'))
-                    AND id NOT IN (SELECT job_id FROM job_feedback){shield}""",
-                [cutoff, *protected],
-            )
-            return int(cursor.rowcount)
+        deleted = 0
+        while True:
+            with self._tx():
+                self._guarded(lease, now)
+                cursor = self.conn.execute(
+                    f"""DELETE FROM jobs WHERE id IN (
+                            SELECT id FROM jobs WHERE last_seen < ?
+                            AND id NOT IN (SELECT job_id FROM user_job_status
+                                           WHERE status IN ('saved', 'applied', 'dismissed'))
+                            AND id NOT IN (SELECT job_id FROM job_feedback){shield}
+                            LIMIT ?)""",
+                    [cutoff, *protected, DELETE_CHUNK],
+                )
+                batch = int(cursor.rowcount)
+            deleted += batch
+            if batch < DELETE_CHUNK:
+                return deleted
 
     # ---------------------------------------------------------- lease and queue
 
@@ -1554,6 +1572,18 @@ class Store:
         """Mark what the display can already tell is over. Display only: a runner learns
         it has lost its lease from its own writes, never from this."""
         stale_queue = (now - timedelta(hours=queued_after_hours)).isoformat()
+        # Read first: a screen polls this while the runner publishes, and a poll must
+        # not queue up behind the runner's write lock when there is nothing to mark.
+        stale = self.conn.execute(
+            """SELECT COUNT(*) AS n FROM run_requests
+               WHERE (status = 'queued' AND requested_at < ?)
+               OR (status = 'running' AND id NOT IN (
+                   SELECT request_id FROM publish_lease
+                   WHERE request_id IS NOT NULL AND expires_at >= ?))""",
+            (stale_queue, now.isoformat()),
+        ).fetchone()
+        if not int(stale["n"]):
+            return
         with self._tx():
             self.conn.execute(
                 """UPDATE run_requests SET status = 'failed', finished_at = ?,

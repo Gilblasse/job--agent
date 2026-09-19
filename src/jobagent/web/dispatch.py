@@ -43,7 +43,7 @@ class ThreadDispatcher:
     def __init__(
         self, open_store: Callable[[], Any], open_fetcher: Callable[[], Any], *,
         doctor: bool = True, heartbeat_seconds: float = 60.0,
-        log: Callable[[str], None] = print,
+        log: Callable[[str], None] = lambda line: print(line, flush=True),
     ):
         self._open_store = open_store
         self._open_fetcher = open_fetcher
