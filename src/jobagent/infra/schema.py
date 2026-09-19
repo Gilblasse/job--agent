@@ -264,4 +264,20 @@ MIGRATIONS.append(
     )
 )
 
+MIGRATIONS.append(
+    (
+        5,
+        """
+        -- Found on the first real run through the website, on 194k verdict rows: the
+        -- retention query's EXISTS (a job's later verdicts in the same search) chose
+        -- idx_matches_search and walked ~58k rows per candidate. One index that starts
+        -- with job_id serves that lookup, job_seen_by_search and the publish NOT EXISTS
+        -- in a handful of rows each; run_id alone serves the per-run statements.
+        CREATE INDEX idx_matches_job_search ON job_search_matches(job_id, search_id, run_id);
+        CREATE INDEX idx_matches_run ON job_search_matches(run_id);
+        DROP INDEX idx_matches_job;
+        """,
+    )
+)
+
 SCHEMA_VERSION = MIGRATIONS[-1][0]

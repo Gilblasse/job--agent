@@ -728,9 +728,9 @@ class Store:
         sql = (
             f"INSERT INTO job_search_matches ({self._MATCH_COLUMNS}) VALUES ("
             "?, ?, ?, ?, ?, ?, ?, "
-            "NOT EXISTS (SELECT 1 FROM job_search_matches m JOIN runs r ON r.id = m.run_id "
-            "AND r.status = 'completed' WHERE m.job_id = ? AND m.search_id = ? "
-            "AND m.decision = 'match'), "
+            "NOT EXISTS (SELECT 1 FROM job_search_matches m INDEXED BY idx_matches_job_search "
+            "JOIN runs r ON r.id = m.run_id AND r.status = 'completed' "
+            "WHERE m.job_id = ? AND m.search_id = ? AND m.decision = 'match'), "
             "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         for chunk in _chunks(list(rows), MAX_BATCH - len(prefix)):
@@ -1368,11 +1368,15 @@ class Store:
         while True:
             with self._tx():
                 self._guarded(lease, now)
+                # INDEXED BY, deliberately: on the real database the planner walked
+                # idx_matches_search (~58k rows per candidate) for this EXISTS and one
+                # chunk took longer than the lease. The job-first index is a few rows.
                 cursor = self.conn.execute(
                     """DELETE FROM job_search_matches WHERE id IN (
                            SELECT m.id FROM job_search_matches m
                            WHERE m.search_id = ? AND m.decision = 'rejected' AND m.run_id < ?
                            AND EXISTS (SELECT 1 FROM job_search_matches n
+                                       INDEXED BY idx_matches_job_search
                                        WHERE n.job_id = m.job_id AND n.search_id = m.search_id
                                        AND n.run_id > m.run_id)
                            LIMIT ?)""",

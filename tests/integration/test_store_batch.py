@@ -20,7 +20,7 @@ from jobagent.domain.models import (
     MatchResult,
 )
 from jobagent.infra import schema
-from jobagent.infra.store import AVAILABLE_RUNS, Store
+from jobagent.infra.store import _COMPLETED, AVAILABLE_RUNS, Store
 from tests.conftest import make_job
 
 NOW = datetime(2026, 9, 14, 12, 0, 0)
@@ -355,6 +355,35 @@ class TestRetention:
         assert store.get_job(plain) is None
         for kept in (saved, noted, shown, fresh):
             assert store.get_job(kept) is not None
+
+
+class TestQueryPlans:
+    """The two statements that walk the verdict table on every run must use the
+    job-first index; on 194k rows the alternative took longer than the lease."""
+
+    def test_retention_and_publish_lookups_use_the_job_first_index(self, store):
+        search_id = store.save_spec("q", "name: q")
+        lease = store.take_lease(NOW)
+        runs = [completed_run(store, search_id, NOW + timedelta(days=n)) for n in range(4)]
+        for run_id in runs:
+            verdict(store, job("Q role"), search_id, run_id, Decision.REJECTED)
+        expire = """SELECT m.id FROM job_search_matches m
+                    WHERE m.search_id = ? AND m.decision = 'rejected' AND m.run_id < ?
+                    AND EXISTS (SELECT 1 FROM job_search_matches n
+                                INDEXED BY idx_matches_job_search
+                                WHERE n.job_id = m.job_id AND n.search_id = m.search_id
+                                AND n.run_id > m.run_id)"""
+        rows_ = store.conn.execute("EXPLAIN QUERY PLAN " + expire, (search_id, runs[1]))
+        plan = " | ".join(row[3] for row in rows_)
+        assert "idx_matches_job_search (job_id=?" in plan, plan
+        assert "idx_matches_search (search_id=? AND run_id>?)" not in plan, plan
+        seen = f"""SELECT 1 FROM job_search_matches
+                   WHERE job_id = ? AND search_id = ? AND decision = 'match' AND {_COMPLETED}"""
+        plan = " | ".join(
+            row[3] for row in store.conn.execute("EXPLAIN QUERY PLAN " + seen, (1, search_id))
+        )
+        assert "idx_matches_job_search" in plan, plan
+        assert store.expire_runs(search_id, lease, NOW) == 1  # still correct
 
 
 class TestSavedJobs:
