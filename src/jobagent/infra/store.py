@@ -796,7 +796,12 @@ class Store:
     # Orders name the result columns above, so they follow the same fallback.
     _RUN_ORDERS = {
         "score": "score DESC, match_id ASC",
-        "date": "COALESCE(posted_at, created_at) DESC, match_id ASC",
+        # Spelled out: inside an expression SQLite resolves a bare name against the
+        # tables, where both have a posted_at, not against the result alias.
+        "date": (
+            "COALESCE(CASE WHEN m.content_hash = '' THEN j.posted_at ELSE m.posted_at END, "
+            "m.created_at) DESC, match_id ASC"
+        ),
         "company": "company ASC, score DESC, match_id ASC",
         "title": "title ASC, match_id ASC",
     }
