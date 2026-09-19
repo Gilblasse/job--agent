@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from jobagent.infra.store import LEASE_SECONDS, LeaseLost, Store
+from jobagent.infra.store import LEASE_SECONDS, Lease, LeaseLost, Store
 
 T0 = datetime(2026, 9, 14, 12, 0, 0)
 EXPIRED = T0 + timedelta(seconds=LEASE_SECONDS + 60)
@@ -95,6 +95,19 @@ class TestTakeover:
         with pytest.raises(LeaseLost):
             store.update_new_count(1, lease, EXPIRED)
         assert store.finish_request(lease, "succeeded", "", 0, EXPIRED) is False
+
+    def test_every_guarded_write_renews_the_lease(self, store):
+        """A long publish keeps itself alive; the heartbeat thread is only a fallback."""
+        lease = store.take_lease(T0)
+        lease = store.consume_request(lease, T0, "schedule")
+        later = T0 + timedelta(seconds=LEASE_SECONDS - 10)
+        store.abandon_stale_runs(lease, later)  # any guarded write
+        renewed_until = (later + timedelta(seconds=LEASE_SECONDS)).isoformat()
+        assert store.lease_row()["expires_at"] == renewed_until
+        assert store.renew_lease(lease, later + timedelta(seconds=LEASE_SECONDS - 5))
+        # A stranger's guard neither passes nor renews.
+        with pytest.raises(LeaseLost):
+            store.abandon_stale_runs(Lease("someone-else"), later)
 
     def test_finishing_releases_the_lease_early(self, store):
         lease = store.take_lease(T0)

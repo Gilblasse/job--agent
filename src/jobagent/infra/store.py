@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -202,6 +203,10 @@ class Store:
             if "publish_guard" in current:
                 raise LeaseLost(str(error)) from error
             raise
+        # ponytail: SQLite has no fairness queue, so a publisher committing batch after
+        # batch starves every other writer on the file -- the API answering a click,
+        # the heartbeat. A short pause lets them in; a queue would be the upgrade.
+        time.sleep(0.025)
         return 0
 
     # ------------------------------------------------------------------ schema
@@ -1207,10 +1212,14 @@ class Store:
 
     @staticmethod
     def guard_statements(lease: Lease, now: datetime) -> list[Statement]:
-        """The two statements every publish batch starts with.
+        """The statements every publish batch starts with: prove the lease, then renew it.
 
         The insert carries the number of valid leases held by this token; zero fails
-        the CHECK, the statement errors, and the batch rolls back.
+        the CHECK, the statement errors, and the batch rolls back -- renewal included.
+        Renewing here, inside the write itself, is what keeps a long publish alive: on a
+        shared SQLite file the heartbeat thread's own connection can starve for the
+        write lock behind the publisher's back-to-back batches, and a lease that only
+        the heartbeat renewed expired mid-publish on the first real run.
         """
         return [
             ("DELETE FROM publish_guard", ()),
@@ -1218,6 +1227,13 @@ class Store:
                 """INSERT INTO publish_guard (ok)
                    SELECT COUNT(*) FROM publish_lease WHERE token = ? AND expires_at >= ?""",
                 (lease.token, now.isoformat()),
+            ),
+            (
+                "UPDATE publish_lease SET expires_at = ? WHERE token = ? AND expires_at >= ?",
+                (
+                    (now + timedelta(seconds=LEASE_SECONDS)).isoformat(), lease.token,
+                    now.isoformat(),
+                ),
             ),
         ]
 
