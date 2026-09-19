@@ -81,11 +81,31 @@ real titles. Two defects only a real database could show, both fixed and pinned:
    could no longer prove ownership. Every guarded batch now renews the lease inside
    the same transaction, and a short pause follows each SQLite batch.
 
-Verified offline: 724 tests and the acceptance test pass; `ruff` clean; `npm run build`
-clean. Verified live: one real run through the website as above; the second, with both
-fixes in, is the next entry. **Not yet verified:** anything against Turso or Vercel —
-the `cloud init`, FK-cascade, atomic-batch, lease and "measure the budget" steps in the
-plan's verification section need the user's accounts.
+**Second real run.** With both fixes in, the accounting search published with no API
+failures — and then the runner sat inside `expire_runs` for 25 minutes holding the
+write lock (`py-spy dump` on the live process showed it). On 194k verdict rows the
+planner served the retention query's EXISTS from `idx_matches_search`, walking ~58k rows
+per candidate for 33k candidates. Migration 5 adds `(job_id, search_id, run_id)` and
+`run_id` indexes, the two hot statements say `INDEXED BY`, and a test asserts the plan
+(decision 51).
+
+**Third real run, 2026-09-18 20:37–20:50.** All four searches ran against the real
+boards and published (accounting 7 matched, React Frontend 9 with 1 new, pm-dfw-hybrid 4,
+react-remote 35 with 2 new; 19k postings each), the request finished `succeeded`, the
+lease renewed throughout, and 0 of 51 API polls failed. The screen showed each search's
+Sep 18 run with real titles.
+
+Verified offline: 725 tests and the acceptance test pass; `ruff` clean; `npm run build`
+clean. Verified live, locally: three real runs through the website as above. **Not yet
+verified:** anything against Turso or Vercel — the `cloud init`, FK-cascade,
+atomic-batch, lease and "measure the budget" steps in the plan's verification section
+need the user's accounts.
+
+Retrospective: every defect in M12 that mattered was found by a real database, not by
+the suite — the suite's data is small enough that a quadratic plan and a starving lock
+both look instant. **Improvement carried forward:** before calling a storage change done,
+run it once against the real local database, and read `py-spy dump` when a run is slow
+rather than reasoning about which statement it must be.
 
 ## Verification evidence
 
