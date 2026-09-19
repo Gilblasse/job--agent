@@ -364,6 +364,11 @@ What to know before trusting it:
   against an index; it is a rule set that a run evaluates over minutes of board fan-out.
   The screen keeps showing one completed run, with its timestamp, until you accept
   "Newer results are ready". "Waiting for an available runner" means exactly that.
+- **Who runs it depends on where the app is.** On a local SQLite database the web
+  process runs the search itself, in a background thread, with the same fetcher and the
+  same robots and rate-limit policy as the command line — the website and the CLI are
+  one system. Deployed, the runner is the GitHub Actions workflow, woken by the site.
+  `JOBAGENT_DISPATCHER=thread|github|none` overrides the choice.
 - **One runner at a time, proven per write.** The runner holds a lease in the database
   and every batch it publishes checks it; a runner that lost its lease cannot write or
   report success. Requests, runs and verdicts are only ever visible once complete.
@@ -395,9 +400,17 @@ activity, and Actions runners use shared IP ranges — the doctor gate inside
 `cloud run` says whether the boards can be read from there, every run.
 
 Locally, with no cloud at all: `cd web && npm ci && npm run build && cd ..`, then
-`python scripts/e2e_server.py` and open http://127.0.0.1:8000 (password `e2e`). It seeds
-a demo database from the fixtures and answers "Search jobs" by running the real runner
-path in-process; that is also what the acceptance test (`pytest -m e2e`) drives.
+
+```bash
+JOBAGENT_DB=~/.jobagent/jobagent.sqlite3 JOBAGENT_WEB_PASSWORD=choose-one \
+  uvicorn app:app --port 8010
+```
+
+and open http://127.0.0.1:8010. That is your command-line database in the browser, and
+"Search jobs" there reads the real boards. `python scripts/e2e_server.py` is the same
+app over a demo database seeded from the test fixtures (password `e2e`), with a runner
+that reads fixtures instead of the network; that is what the acceptance test
+(`pytest -m e2e`) drives.
 
 ## Data and privacy
 

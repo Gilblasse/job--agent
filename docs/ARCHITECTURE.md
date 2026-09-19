@@ -268,6 +268,13 @@ its latest verdict and an old match can never resurface because a newer rejectio
 pruned. Match verdicts are never pruned. Jobs unseen for 60 days with no saved, applied
 or dismissed status, no feedback and no verdict in an available run are deleted.
 
+Who runs a queued request is the dispatcher's choice (`web/dispatch.py`): in-process, in
+a background thread with the real fetcher, when the app runs on a local SQLite database
+— the website and the command line are then one system; GitHub Actions when deployed,
+because a Vercel function cannot host a minutes-long fan-out; nobody, until the schedule,
+when the cloud database is configured without GitHub credentials. The runner path is the
+same in every case, and it seeds the registry from the bundled file when it is empty.
+
 ### The search screen
 
 "Search jobs" saves the rules (with the revision) and queues a request; it does not
