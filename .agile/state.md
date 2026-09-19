@@ -59,10 +59,33 @@ cloud database; a single shared password; the Indeed-style layout.
   real runner path over the fixtures — queued → searching → newer results, a failed run,
   an expired run — with no GitHub and no cloud.
 
-Verified offline: 717 tests and the acceptance test pass; `ruff` clean; `npm run build`
-clean. **Not yet verified:** anything against a real Turso database or Vercel — the
-`cloud init`, FK-cascade, atomic-batch, lease and "measure the budget" steps in the
-plan's verification section are the next actions, and they need the user's accounts.
+**The website runs its own searches.** After the first hand-off the user asked for one
+system, not two: on a local SQLite database the web process now runs the same runner
+path in a background thread with the real fetcher (`web/dispatch.py`,
+`ThreadDispatcher`), and the runner seeds the registry when it is empty. GitHub stays
+the runner when deployed.
+
+**First real run through the website, 2026-09-18** (the user's database: 24.5k jobs,
+194k verdicts, four searches). The accounting search read 19,160 postings from real
+boards, matched 8 (0 new — all seen before), and the screen went from the Sep 14 results
+through "Searching…" to "Newer results are ready" and then showed the Sep 18 run with
+real titles. Two defects only a real database could show, both fixed and pinned:
+
+1. Every status poll ran `reconcile_requests`, which opened a write transaction and
+   timed out ("database is locked") while the runner held one of its retention deletes
+   over 177k verdict rows. Polls now read first and write only when a request is over;
+   the connection waits 30 s; retention deletes in chunks of 2,000 rows.
+2. The runner's heartbeat thread starved for the SQLite write lock behind the
+   publisher's back-to-back batches (there is no fairness queue), the lease expired
+   mid-publish, and the runner stopped after the first search — correctly, since it
+   could no longer prove ownership. Every guarded batch now renews the lease inside
+   the same transaction, and a short pause follows each SQLite batch.
+
+Verified offline: 724 tests and the acceptance test pass; `ruff` clean; `npm run build`
+clean. Verified live: one real run through the website as above; the second, with both
+fixes in, is the next entry. **Not yet verified:** anything against Turso or Vercel —
+the `cloud init`, FK-cascade, atomic-batch, lease and "measure the budget" steps in the
+plan's verification section need the user's accounts.
 
 ## Verification evidence
 

@@ -235,13 +235,18 @@ Seven invariants, each enforced in code and pinned by a test:
    transaction that closes the old owner's request. From then on the old runner's
    heartbeat, every guard and its `finish_request` match zero rows. No reconciliation is
    involved in correctness. — `Store.take_lease`, `tests/integration/test_lease.py`
-3. **Every cloud write group is atomic and lease-proven.** A publish batch is one Hrana
-   `batch` request whose steps are conditioned on the previous step's success, `COMMIT`
-   on the last and `ROLLBACK` on its negation; its first statements insert the number of
-   valid leases held by the writer's token into `publish_guard(ok CHECK (ok = 1))`. Zero
-   fails the CHECK and the whole batch rolls back. Short API-side groups (a dismissal:
-   rule, status and reason) are baton-based interactive transactions. —
-   `infra/turso.py`, `Store._tx`, `Store.guard_statements`
+3. **Every cloud write group is atomic and lease-proven, and renews the lease.** A
+   publish batch is one Hrana `batch` request whose steps are conditioned on the
+   previous step's success, `COMMIT` on the last and `ROLLBACK` on its negation; its
+   first statements insert the number of valid leases held by the writer's token into
+   `publish_guard(ok CHECK (ok = 1))` — zero fails the CHECK and the whole batch rolls
+   back — and then push the lease's expiry out. The publisher keeps itself alive with
+   every write; the heartbeat thread only covers the fan-out, when nothing is being
+   written. (On a shared SQLite file the heartbeat's own connection can starve behind
+   the publisher's back-to-back batches — the first real run through the website lost
+   its lease that way.) Short API-side groups (a dismissal: rule, status and reason)
+   are baton-based interactive transactions. — `infra/turso.py`, `Store._tx`,
+   `Store.guard_statements`
 4. **At most one queued request, by constraint.** A partial unique index on
    `run_requests(status) WHERE status = 'queued'` makes "create or attach" atomic under
    concurrent clicks. The workflow carries no inputs: every run consumes whatever is
