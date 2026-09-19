@@ -273,9 +273,12 @@ MIGRATIONS.append(
         -- idx_matches_search and walked ~58k rows per candidate. One index that starts
         -- with job_id serves that lookup, job_seen_by_search and the publish NOT EXISTS
         -- in a handful of rows each; run_id alone serves the per-run statements.
-        CREATE INDEX idx_matches_job_search ON job_search_matches(job_id, search_id, run_id);
-        CREATE INDEX idx_matches_run ON job_search_matches(run_id);
-        DROP INDEX idx_matches_job;
+        -- IF NOT EXISTS / IF EXISTS: the web app opens the database from several
+        -- request threads at once, and two of them may reach this migration together.
+        CREATE INDEX IF NOT EXISTS idx_matches_job_search
+            ON job_search_matches(job_id, search_id, run_id);
+        CREATE INDEX IF NOT EXISTS idx_matches_run ON job_search_matches(run_id);
+        DROP INDEX IF EXISTS idx_matches_job;
         """,
     )
 )

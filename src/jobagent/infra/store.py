@@ -228,8 +228,11 @@ class Store:
             if version in applied:
                 continue
             stmts: list[Statement] = [(statement, ()) for statement in split_statements(sql)]
+            # OR IGNORE: two connections opening the database together both read the
+            # version as missing; the second's statements must land as no-ops, not as
+            # a failed request.
             stmts.append((
-                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
                 (version, datetime.now().isoformat()),
             ))
             self._batch(stmts)
