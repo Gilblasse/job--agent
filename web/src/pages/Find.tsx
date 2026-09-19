@@ -174,6 +174,15 @@ export default function Find() {
     };
   }, [jobParam, uid, runParam]);
 
+  // Nothing on screen and a completed run exists: show it. Only when nothing is on
+  // screen -- a run the user is reading is never swapped out from under them.
+  const latestId = status?.latest_run?.id ?? null;
+  useEffect(() => {
+    if (!uid || runParam || page.run || loading || expired || !latestId) return;
+    update({ run: String(latestId) }, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uid, runParam, page.run, loading, expired, latestId]);
+
   const dirty = useMemo(() => (current ? !specEquals(draft, current.spec) : true), [draft, current]);
 
   async function loadMore() {

@@ -774,22 +774,31 @@ class Store:
 
     # ------------------------------------------------------------------ results
 
-    _RUN_COLUMNS = """
+    # The frozen fields, or -- for verdict rows written before they existed (an empty
+    # content_hash) -- the current job row, so older databases still list correctly.
+    _FROZEN = ", ".join(
+        f"CASE WHEN m.content_hash = '' THEN j.{col} ELSE m.{col} END AS {col}"
+        for col in (
+            "title", "company", "location_raw", "workplace", "employment_type",
+            "salary_min", "salary_max", "salary_currency", "salary_period", "posted_at", "url",
+        )
+    )
+    _RUN_COLUMNS = f"""
         j.id, j.identity, j.first_seen, j.last_seen, j.verification, j.description_text,
         j.department, j.city, j.region, j.country, j.authority,
-        m.title, m.company, m.location_raw, m.workplace, m.employment_type,
-        m.salary_min, m.salary_max, m.salary_currency, m.salary_period, m.posted_at, m.url,
+        {_FROZEN},
         m.decision, m.score, m.uncertain, m.explanation, m.is_new, m.run_id, m.search_id,
-        m.id AS match_id, m.content_hash AS evaluated_hash,
-        (j.content_hash != m.content_hash) AS changed_since,
+        m.created_at, m.id AS match_id, m.content_hash AS evaluated_hash,
+        (m.content_hash != '' AND j.content_hash != m.content_hash) AS changed_since,
         COALESCE(u.status, 'new') AS user_status
     """
 
+    # Orders name the result columns above, so they follow the same fallback.
     _RUN_ORDERS = {
-        "score": "m.score DESC, m.id ASC",
-        "date": "COALESCE(m.posted_at, m.created_at) DESC, m.id ASC",
-        "company": "m.company ASC, m.score DESC, m.id ASC",
-        "title": "m.title ASC, m.id ASC",
+        "score": "score DESC, match_id ASC",
+        "date": "COALESCE(posted_at, created_at) DESC, match_id ASC",
+        "company": "company ASC, score DESC, match_id ASC",
+        "title": "title ASC, match_id ASC",
     }
     _HISTORY_ORDERS = {
         "score": "m.score DESC, j.last_seen DESC, m.id ASC",
