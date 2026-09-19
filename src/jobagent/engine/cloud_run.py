@@ -22,6 +22,7 @@ from typing import Any
 from ..domain.spec import SearchSpec
 from ..infra.publish import PublishReport, finish_publish, publish_run, pull
 from ..infra.store import Lease, LeaseLost, Store
+from ..sources.registry import ensure_registry
 from .doctor import describe as describe_doctor
 from .doctor import run_doctor
 from .orchestrator import run_search
@@ -108,6 +109,9 @@ def run_cloud(
         with tempfile.TemporaryDirectory() as scratch_dir, contextlib.ExitStack() as stack:
             local = Store(Path(scratch_dir) / "scratch.sqlite3")
             stack.callback(local.close)
+            seeded = ensure_registry(cloud)
+            if seeded:
+                log(f"registry was empty; seeded {seeded} boards")
             pulled = pull(cloud, local)
             log(f"pulled {pulled.searches} searches and {pulled.boards} boards")
 

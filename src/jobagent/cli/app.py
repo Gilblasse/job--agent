@@ -32,7 +32,7 @@ from ..infra.http import HttpFetcher
 from ..infra.store import DEFAULT_DB_PATH, Store
 from ..infra.turso import TursoConnection
 from ..sources.catalog import CATALOG, EXCLUDED, ats_adapters
-from ..sources.registry import add_from_url, import_csv, load_seed_file, seed_registry
+from ..sources.registry import add_from_url, ensure_registry, import_csv, seed_registry
 from . import export as exporters
 from .export import load_explanation
 from .render import (
@@ -890,19 +890,7 @@ def cloud_init() -> None:
     url, token = open_cloud()
     cloud = _cloud_store(url, token)
     cloud.migrate()
-    now = datetime.now().isoformat()
-    rows = [
-        {
-            "company": row["company"], "domain": row.get("domain"), "ats": row["ats"],
-            "token": row["token"], "board_url": row.get("board_url", ""), "source": "seed",
-            "us_signal": int(bool(row.get("us_signal"))), "first_seen": now,
-            "last_verified": None, "last_success": None, "consecutive_failures": 0,
-            "last_failure_kind": "",
-            "notes": json.dumps(row.get("extra") or {}) if row.get("extra") else "",
-        }
-        for row in load_seed_file().get("companies") or []
-    ]
-    cloud.insert_registry_rows(rows)
+    ensure_registry(cloud)
     counts = cloud.registry_counts()
     console.print(
         f"[green]Cloud database ready: {sum(counts.values())} boards registered.[/green]"

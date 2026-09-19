@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -76,6 +77,30 @@ def seed_registry(store: Store, *, only_us: bool = False) -> SeedReport:
         report.by_platform[row["ats"]] = report.by_platform.get(row["ats"], 0) + 1
 
     return report
+
+
+def ensure_registry(store: Store) -> int:
+    """Seed the registry from the bundled file when it is empty; returns boards added.
+
+    Batched rather than row by row, because over HTTP each row would be a round trip.
+    Discovery is fan-out over the registry, so an empty one is an empty market that
+    looks like a search result -- the one thing a run must never quietly do.
+    """
+    if store.registry_counts():
+        return 0
+    now = datetime.now().isoformat()
+    rows = [
+        {
+            "company": row["company"], "domain": row.get("domain"), "ats": row["ats"],
+            "token": row["token"], "board_url": row.get("board_url", ""), "source": "seed",
+            "us_signal": int(bool(row.get("us_signal"))), "first_seen": now,
+            "last_verified": None, "last_success": None, "consecutive_failures": 0,
+            "last_failure_kind": "",
+            "notes": json.dumps(row.get("extra") or {}) if row.get("extra") else "",
+        }
+        for row in load_seed_file().get("companies") or []
+    ]
+    return store.insert_registry_rows(rows)
 
 
 def add_from_url(

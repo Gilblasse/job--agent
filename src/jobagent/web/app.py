@@ -68,7 +68,7 @@ def get_store(request: Request) -> Store:
 
 def get_dispatcher(request: Request) -> Dispatcher:
     if request.app.state.dispatcher is None:
-        request.app.state.dispatcher = dispatcher_from_env()
+        request.app.state.dispatcher = dispatcher_from_env(request.app.state.store_factory)
     return request.app.state.dispatcher
 
 
