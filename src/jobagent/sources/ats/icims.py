@@ -17,32 +17,56 @@ Three things about the shape that are not obvious from one card:
 
 - A card carries the title, a ``US-FL-Bartow`` style location, the displayed requisition
   ID, a teaser paragraph and a few labelled fields (Category, Position Type, Remote). It
-  carries NO date; the job page does, and a later pass reads it.
+  carries NO date and NO pay field, and its teaser is a few lines, not the description.
 - The numeric id in the job URL is the stable identity. The displayed ID ("2026-5819") is
   the tenant's own numbering and is kept as evidence, not used as the key.
 - ``Remote`` is Yes or No. Yes means remote; No only means the tenant did not mark it
   remote, which is not the same as onsite, so it maps to UNKNOWN and the description
   decides.
 
-What the card does not publish: pay, and the full description. Pay is inferred from the
-teaser downstream when the tenant writes it there.
+The job page fills the gaps. It embeds one ``<script type="application/ld+json">``
+schema.org ``JobPosting`` (verified live 2026-09-20) carrying the full description as
+HTML, ``datePosted``, ``employmentType``, ``jobLocation`` with a postal address, and
+``baseSalary``. The description replaces the teaser in BOTH ``description_text`` and
+``description_html``: the gates judge the text field first, so a teaser left there would
+be what gets judged. Each page costs a request, so at most ``max_details`` are read per
+board and title matches go first (``prioritize_for_details``); a posting the budget did
+not reach stays as the card listed it.
+
+Pay: iCIMS writes ``baseSalary`` with no ``unitText``, so a stated unit is honoured when
+present and otherwise the magnitude decides -- a maximum under 500 is hourly, a minimum
+of 10,000 or more is yearly, and anything between is read from the description's own
+words or left unread. A range is never assumed yearly: 17-25 read as dollars a year would
+fail every pay floor.
 """
 
 from __future__ import annotations
 
 import html
+import json
 import re
 from dataclasses import dataclass
 from datetime import date
+from typing import Any
 from urllib.parse import urlencode
 
-from ...domain.models import RawPosting, WorkplaceType
+from ...domain.models import RawPosting, SalaryRange, WorkplaceType
+from ...domain.normalize import parse_salary
 from ...domain.text import html_to_text
 from ...ports import Fetcher, FetchError
-from .base import TERM_SEPARATOR, AtsAdapter, BoardTarget, ats_authority, require_ok
+from .base import (
+    TERM_SEPARATOR,
+    AtsAdapter,
+    BoardTarget,
+    ats_authority,
+    prioritize_for_details,
+    require_ok,
+)
 
 API = "https://{token}.icims.com/jobs/search"
 PAGE_SIZE = 50
+_JSON_LD = re.compile(r"<script\b[^>]*application/ld\+json[^>]*>(.*?)</script>", re.S)
+_PERIODS = ("hour", "day", "week", "month", "year")
 
 _TABLE = "iCIMS_JobsTable"
 _CARD = 'class="iCIMS_JobCardItem"'
@@ -103,7 +127,69 @@ class IcimsAdapter(AtsAdapter):
                 # a full last page otherwise costs one more request that comes back empty.
                 if len(cards) < PAGE_SIZE or _is_last_page(response.text):
                     break
+
+        # Job pages cost one request each and are capped; title matches go first so the
+        # budget buys descriptions for the jobs asked about, not whatever was listed first.
+        for posting in prioritize_for_details(postings, terms, self.max_details):
+            self._enrich(fetcher, posting)
         return postings
+
+    def _enrich(self, fetcher: Fetcher, posting: RawPosting) -> None:
+        try:
+            response = fetcher.get(posting.extra["detail_url"])
+        except FetchError as error:
+            # A blocked host must NOT be swallowed here. Descriptions are what the
+            # workplace, requirement and salary gates read, so quietly returning postings
+            # without them presents a degraded run as a healthy one.
+            if error.blocked:
+                raise
+            return
+        except Exception:  # noqa: BLE001 - a missing job page is not a failed board
+            return
+        if not response.ok:
+            return
+        data = _job_posting(response.text)
+        if data is None:
+            return
+
+        description = data.get("description")
+        if isinstance(description, str) and description:
+            # Both fields: the gates judge description_text first, and the card's teaser
+            # left there would be what gets judged.
+            posting.description_html = description
+            posting.description_text = html_to_text(description)
+        posted = data.get("datePosted")
+        if isinstance(posted, str):
+            try:
+                posting.posted_at = date.fromisoformat(posted[:10])
+            except ValueError:
+                pass
+        kind = data.get("employmentType")
+        if not posting.employment_type and isinstance(kind, str) and kind:
+            # "FULL_TIME" as the taxonomy spells it: "full time".
+            posting.employment_type = kind.replace("_", " ").lower()
+
+        places = data.get("jobLocation")
+        names: list[str] = []
+        country = None
+        for place in places if isinstance(places, list) else [places]:
+            address = place.get("address") if isinstance(place, dict) else None
+            if not isinstance(address, dict):
+                continue
+            parts = [address.get(k) for k in ("addressLocality", "addressRegion", "addressCountry")]
+            name = ", ".join(p for p in parts if isinstance(p, str) and p)
+            if name:
+                names.append(name)
+                country = country or address.get("addressCountry")
+        if names:
+            posting.location_raw = "; ".join(names)  # the separator parse_location reads
+            if isinstance(country, str) and len(country) == 2:
+                posting.country_hint = country.upper()
+
+        posting.salary = (
+            _salary(data.get("baseSalary"), data.get("salaryCurrency"), posting.description_text)
+            or posting.salary
+        )
 
     def _posting(self, card: dict[str, str], target: BoardTarget) -> RawPosting:
         href = card["href"]
@@ -179,6 +265,55 @@ def _is_last_page(page: str) -> bool:
     """The results header says "Page 1 of 7"; a page at or past its total is the last."""
     match = _PAGE_OF.search(page)
     return bool(match) and int(match.group(1)) >= int(match.group(2))
+
+
+def _job_posting(page: str) -> dict[str, Any] | None:
+    """The job page's schema.org JobPosting, or None when it is missing or unreadable.
+
+    The first JSON-LD block is read; it may hold one object or a list of them.
+    """
+    match = _JSON_LD.search(page)
+    if not match:
+        return None
+    try:
+        data = json.loads(match.group(1))
+    except ValueError:
+        return None
+    for item in data if isinstance(data, list) else [data]:
+        if isinstance(item, dict) and item.get("@type") == "JobPosting":
+            return item
+    return None
+
+
+def _salary(base: Any, currency: Any, text: str) -> SalaryRange | None:
+    """``baseSalary`` as a range, read in both schema.org shapes.
+
+    The figures sit either directly on the MonetaryAmount or on its ``value``
+    QuantitativeValue. A posting with no ``unitText`` is the norm on iCIMS, so when the
+    unit is missing the magnitude decides: a maximum under 500 is an hourly rate, a
+    minimum of 10,000 or more is yearly, and anything between is left to the words of the
+    description (``parse_salary``), which may find nothing. Never a guess of "year": 17-25
+    read as dollars a year would fail every pay floor.
+    """
+    if not isinstance(base, dict):
+        return None
+    value = base["value"] if isinstance(base.get("value"), dict) else base
+    low, high = value.get("minValue"), value.get("maxValue", value.get("minValue"))
+    if not isinstance(low, (int, float)) or not isinstance(high, (int, float)):
+        return None
+    unit = str(value.get("unitText") or base.get("unitText") or "").lower()
+    if unit in _PERIODS:
+        period = unit
+    elif high < 500:
+        period = "hour"
+    elif low >= 10_000:
+        period = "year"
+    else:
+        return parse_salary(text)
+    return SalaryRange(
+        minimum=float(low), maximum=float(high) if high != low else None,
+        currency=str(base.get("currency") or currency or "USD"), period=period,
+    )
 
 
 def _clean(fragment: str) -> str:
