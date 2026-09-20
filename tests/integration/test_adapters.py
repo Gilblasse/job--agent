@@ -99,6 +99,50 @@ class TestAshby:
     def test_apply_url_is_preferred_over_the_listing_url(self):
         assert self.postings[0].apply_url.endswith("/application")
 
+    def test_structured_salary_comes_from_the_tier_components(self):
+        """Compensation is nested under ``compensation``; reading it at the top level of
+        the job, as the adapter used to, left salary empty on every live board."""
+        salary = self.postings[0].salary
+        assert (salary.minimum, salary.maximum, salary.currency, salary.period) == (
+            80000.0, 100000.0, "USD", "year",
+        )
+
+    def test_summary_string_is_the_fallback_when_tiers_are_empty(self):
+        """Some boards publish only the summary text, with an en dash, not a hyphen."""
+        salary = self.postings[1].salary
+        assert (salary.minimum, salary.maximum) == (90000.0, 110000.0)
+
+    def test_missing_or_equity_only_compensation_yields_no_salary(self):
+        """Live boards omit the key, publish null, or publish only an equity component;
+        none of those is a salary and none may raise."""
+        equity_only = {
+            "compensationTierSummary": "Offers Equity",
+            "scrapeableCompensationSalarySummary": None,
+            "compensationTiers": [{
+                "id": "t", "tierSummary": "Offers Equity", "title": None,
+                "additionalInformation": None,
+                "components": [{
+                    "id": "c", "summary": "Offers Equity",
+                    "compensationType": "EquityPercentage", "interval": "NONE",
+                    "currencyCode": None, "minValue": None, "maxValue": None,
+                }],
+            }],
+            "summaryComponents": [{
+                "compensationType": "EquityPercentage", "interval": "NONE",
+                "currencyCode": None, "minValue": None, "maxValue": None,
+            }],
+        }
+        payload = {"jobs": [
+            {"id": "n-1", "title": "Role One", "jobUrl": "https://jobs.ashbyhq.com/acme/n-1"},
+            {"id": "n-2", "title": "Role Two", "jobUrl": "https://jobs.ashbyhq.com/acme/n-2",
+             "compensation": None},
+            {"id": "n-3", "title": "Role Three", "jobUrl": "https://jobs.ashbyhq.com/acme/n-3",
+             "compensation": equity_only},
+        ]}
+        fetcher = FakeFetcher(routes={"api.ashbyhq.com": payload})
+        postings = AshbyAdapter().fetch_board(fetcher, acme())
+        assert [p.salary for p in postings] == [None, None, None]
+
 
 class TestWorkable:
     """The fixture's shape is copied from a live capture, 2026-09-15 (see fixtures)."""

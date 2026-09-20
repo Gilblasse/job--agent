@@ -2,7 +2,7 @@
 
 One request returns the whole board with descriptions, a real ``isRemote`` boolean and a
 three-state ``workplaceType``. Compensation is only included when asked for, so it is
-always requested.
+always requested; it arrives nested under each job's ``compensation`` object.
 
 Ashby's API host is reported to answer 401 for /robots.txt. Under RFC 9309 a 4xx means no
 robots file is published, which permits access; that behaviour is implemented in
@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 
-from ...domain.models import RawPosting, WorkplaceType
+from ...domain.models import RawPosting, SalaryRange, WorkplaceType
 from ...domain.normalize import parse_salary
 from ...ports import Fetcher
 from .base import AtsAdapter, BoardTarget, ats_authority, require_ok
@@ -26,6 +26,12 @@ WORKPLACE = {
     "onsite": WorkplaceType.ONSITE,
     "on-site": WorkplaceType.ONSITE,
     "hybrid": WorkplaceType.HYBRID,
+}
+
+# Ashby states the pay interval on each compensation component, so it is mapped rather
+# than guessed.
+INTERVAL = {
+    "1 YEAR": "year", "1 MONTH": "month", "1 WEEK": "week", "1 DAY": "day", "1 HOUR": "hour",
 }
 
 
@@ -93,14 +99,48 @@ class AshbyAdapter(AtsAdapter):
                     ),
                     posted_at=_parse_date(job.get("publishedAt") or job.get("updatedAt")),
                     authority=ats_authority(url, target.domain),
-                    # includeCompensation=true was being requested and then ignored, so
-                    # salary fell back to scraping the description for no reason.
-                    salary=parse_salary(
-                        str(job.get("compensationTierSummary") or "")
-                    ),
+                    # Compensation lives under job["compensation"], never at the top
+                    # level; reading it there left salary empty on every live board.
+                    salary=_salary(job.get("compensation")),
                 )
             )
         return postings
+
+
+def _salary(compensation: object) -> SalaryRange | None:
+    """Structured Salary component first (tiers, then the summary), else the summary text."""
+    if not isinstance(compensation, dict):
+        return None
+    components = [
+        component
+        for tier in compensation.get("compensationTiers") or []
+        if isinstance(tier, dict)
+        for component in tier.get("components") or []
+    ]
+    components += compensation.get("summaryComponents") or []
+    for component in components:
+        if not isinstance(component, dict) or component.get("compensationType") != "Salary":
+            continue
+        minimum, maximum = _number(component.get("minValue")), _number(component.get("maxValue"))
+        if minimum is None and maximum is None:
+            continue
+        return SalaryRange(
+            minimum=minimum,
+            maximum=maximum,
+            currency=str(component.get("currencyCode") or "USD"),
+            period=INTERVAL.get(str(component.get("interval") or ""), "year"),
+        )
+    return parse_salary(
+        str(
+            compensation.get("compensationTierSummary")
+            or compensation.get("scrapeableCompensationSalarySummary")
+            or ""
+        )
+    )
+
+
+def _number(value: object) -> float | None:
+    return float(value) if isinstance(value, (int, float)) else None
 
 
 def _parse_date(value: object):

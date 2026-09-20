@@ -9,7 +9,54 @@
    "workplaceType": "Remote",
    "departmentName": "Finance",
    "employmentType": "FullTime",
-   "compensationTierSummary": "$80K - $100K",
+   "compensation": {
+    "compensationTierSummary": "$80K – $100K • Offers Equity",
+    "scrapeableCompensationSalarySummary": "$80K - $100K",
+    "compensationTiers": [
+     {
+      "id": "tier-1",
+      "tierSummary": "$80K – $100K • Offers Equity",
+      "title": null,
+      "additionalInformation": null,
+      "components": [
+       {
+        "id": "comp-1",
+        "summary": "Offers Equity",
+        "compensationType": "EquityPercentage",
+        "interval": "NONE",
+        "currencyCode": null,
+        "minValue": null,
+        "maxValue": null
+       },
+       {
+        "id": "comp-2",
+        "summary": "$80K – $100K",
+        "compensationType": "Salary",
+        "interval": "1 YEAR",
+        "currencyCode": "USD",
+        "minValue": 80000,
+        "maxValue": 100000
+       }
+      ]
+     }
+    ],
+    "summaryComponents": [
+     {
+      "compensationType": "EquityPercentage",
+      "interval": "NONE",
+      "currencyCode": null,
+      "minValue": null,
+      "maxValue": null
+     },
+     {
+      "compensationType": "Salary",
+      "interval": "1 YEAR",
+      "currencyCode": "USD",
+      "minValue": 80000,
+      "maxValue": 100000
+     }
+    ]
+   },
    "publishedAt": "2026-09-05T00:00:00Z",
    "jobUrl": "https://jobs.ashbyhq.com/acme/a-1",
    "applyUrl": "https://jobs.ashbyhq.com/acme/a-1/application",
@@ -24,6 +71,12 @@
    "isRemote": true,
    "workplaceType": "Remote",
    "departmentName": "Finance",
+   "compensation": {
+    "compensationTierSummary": "$90K – $110K",
+    "scrapeableCompensationSalarySummary": "$90K - $110K",
+    "compensationTiers": [],
+    "summaryComponents": []
+   },
    "publishedAt": "2026-09-06T00:00:00Z",
    "jobUrl": "https://jobs.ashbyhq.com/acme/a-2",
    "descriptionPlain": "Lead auditing engagements across the group.",
