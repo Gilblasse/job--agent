@@ -298,6 +298,73 @@ class TestRateLimiting:
         assert time.monotonic() - start >= 0.05
 
 
+class TestCrawlDelay:
+    """robots.txt Crawl-delay is the host's stated pace, and it was never read.
+
+    Every host was paced at the flat default interval: api.lever.co publishes
+    ``Crawl-delay: 1`` and was being hit four times a second. None of these tests sleep;
+    each makes one request and reads how far ahead the host's ``next_allowed`` landed.
+    """
+
+    @staticmethod
+    def gap(fetcher: HttpFetcher) -> float:
+        return fetcher._hosts["example.com"].next_allowed - time.monotonic()
+
+    def test_a_crawl_delay_widens_the_host_interval(self):
+        fetcher = fetcher_with({
+            "/robots.txt": (200, "User-agent: *\nCrawl-delay: 1", {}),
+            "/api": (200, "{}", {}),
+        })
+        fetcher.get("https://example.com/api")
+        assert self.gap(fetcher) >= 0.9
+
+    def test_no_crawl_delay_keeps_the_default_interval(self):
+        fetcher = fetcher_with({**ALLOW_ALL, "/api": (200, "{}", {})}, interval=0.05)
+        fetcher.get("https://example.com/api")
+        assert 0 < self.gap(fetcher) <= 0.05
+
+    def test_the_crawl_delay_is_capped_and_unparsable_values_are_ignored(self):
+        """Honoured because the host asked; capped because one value must not stall a run."""
+        fetcher = fetcher_with({
+            "/robots.txt": (200, "User-agent: *\nCrawl-delay: 600", {}),
+            "/api": (200, "{}", {}),
+        })
+        fetcher.get("https://example.com/api")
+        assert fetcher.robots.crawl_delay("https://example.com/api") == 600.0
+        assert 29.0 <= self.gap(fetcher) <= 30.0
+
+        fetcher = fetcher_with({
+            "/robots.txt": (200, "User-agent: *\nCrawl-delay: abc", {}),
+            "/api": (200, "{}", {}),
+        }, interval=0.05)
+        fetcher.get("https://example.com/api")
+        assert fetcher.robots.crawl_delay("https://example.com/api") is None
+        assert 0 < self.gap(fetcher) <= 0.05
+
+    def test_a_delay_for_another_agent_does_not_apply(self):
+        fetcher = fetcher_with({
+            "/robots.txt": (
+                200, "User-agent: googlebot\nCrawl-delay: 5\n\nUser-agent: *\nDisallow: /private/",
+                {},
+            ),
+            "/api": (200, "{}", {}),
+        }, interval=0.05)
+        fetcher.get("https://example.com/api")
+        assert fetcher.robots.crawl_delay("https://example.com/api") is None
+        assert 0 < self.gap(fetcher) <= 0.05
+
+    def test_disabled_robots_ignores_crawl_delay(self):
+        """No robots lookup means no delay to honour, and no robots.txt request either."""
+        client = StubClient({
+            "/robots.txt": (200, "User-agent: *\nCrawl-delay: 5", {}),
+            "/api": (200, "{}", {}),
+        })
+        fetcher = HttpFetcher(respect_robots=False, min_interval=0.0, client=client)
+        fetcher.get("https://example.com/api")
+        assert not any("robots" in url for _, url, _ in client.calls)
+        assert self.gap(fetcher) <= 0.0  # the host may be hit again at once
+
+
 class TestTransportFailures:
     def test_a_connection_error_becomes_a_non_blocking_fetch_error(self):
         """This is the path the egress policy takes in a restricted environment."""

@@ -1,9 +1,9 @@
 """The single point of network egress.
 
-Every rule about how this tool touches other people's servers lives here: robots.txt,
-per-host rate limiting, backoff, the user agent, and what "blocked" means. Source
-adapters receive one of these and have no other way to reach the network, so none of them
-can forget a rule or decide to route around one.
+Every rule about how this tool touches other people's servers lives here: robots.txt
+(including its Crawl-delay), per-host rate limiting, backoff, the user agent, and what
+"blocked" means. Source adapters receive one of these and have no other way to reach the
+network, so none of them can forget a rule or decide to route around one.
 """
 
 from __future__ import annotations
@@ -28,8 +28,13 @@ USER_AGENT = (
 # Deliberately modest. These are documented public JSON endpoints, but several platforms
 # host thousands of tenants behind one hostname, so the limit is per HOST rather than per
 # company -- the mistake that turns a fan-out into a self-inflicted rate-limit storm.
+# A floor, not the pace: a host's robots.txt Crawl-delay raises it, never lowers it.
 DEFAULT_MIN_INTERVAL = 0.25
 DEFAULT_TIMEOUT = 20.0
+
+# Honoured because it is the host's stated wish; capped because one hostile or mistyped
+# value must not stall a whole run behind a single host.
+MAX_CRAWL_DELAY = 30.0
 
 
 class HostBlocked(FetchError):
@@ -108,6 +113,23 @@ class RobotsPolicy:
         allowed = parser.can_fetch(user_agent, url)
         return allowed, "allowed by robots.txt" if allowed else "disallowed by robots.txt"
 
+    def crawl_delay(self, url: str, user_agent: str = USER_AGENT) -> float | None:
+        """The host's requested seconds between requests, if it published one.
+
+        None when checking is disabled, when the host published no robots.txt or it could
+        not be read, or when the file names no (integer) delay for us.
+        """
+        if not self._enabled:
+            return None
+        parts = urlsplit(url)
+        # A plain read of the entry ``allows()`` just cached for this origin on this same
+        # thread, so no lock is needed.
+        parser = self._cache.get(f"{parts.scheme}://{parts.netloc}")
+        if parser is None or isinstance(parser, _Unreachable):
+            return None
+        value = parser.crawl_delay(user_agent)
+        return None if value is None else float(value)
+
     def _load(
         self, origin: str
     ) -> urllib.robotparser.RobotFileParser | _Unreachable | None:
@@ -167,6 +189,7 @@ class HttpFetcher:
             now = time.monotonic()
             if now < state.next_allowed:
                 time.sleep(state.next_allowed - now)
+            # The floor only: this IS the robots fetch, so its Crawl-delay is not known yet.
             state.next_allowed = time.monotonic() + self.min_interval
         # Counted as traffic, because it is, but not charged to the source's allowance:
         # the planner hands a source exactly ``budget`` boards, and charging the one
@@ -240,7 +263,15 @@ class HttpFetcher:
             state.blocked_reason = note
             raise HostBlocked(f"{host}: {note}", blocked=True)
 
-        response = self._send(method, url, state, params=params, json=json, headers=headers)
+        # The host's Crawl-delay widens the per-host interval; it never narrows the floor.
+        interval = self.min_interval
+        delay = self.robots.crawl_delay(url, self.user_agent)
+        if delay:
+            interval = max(interval, min(delay, MAX_CRAWL_DELAY))
+
+        response = self._send(
+            method, url, state, interval, params=params, json=json, headers=headers
+        )
         self._enforce(url, response, state, host)
 
         if response.status_code == 429:
@@ -254,7 +285,7 @@ class HttpFetcher:
                 state.retry_waits_used += 1
                 time.sleep(retry_after)
                 response = self._send(
-                    method, url, state, params=params, json=json, headers=headers
+                    method, url, state, interval, params=params, json=json, headers=headers
                 )
                 # The retry gets the SAME checks as the first attempt. Returning it
                 # directly let a 429-then-redirect, or a 429-then-403, come back as an
@@ -287,7 +318,7 @@ class HttpFetcher:
             raise HostBlocked(f"{host} returned 403", blocked=True, status=403)
 
     def _send(
-        self, method: str, url: str, state: _HostState, *,
+        self, method: str, url: str, state: _HostState, interval: float, *,
         params: dict[str, Any] | None, json: dict[str, Any] | None,
         headers: dict[str, str] | None,
     ) -> httpx.Response:
@@ -295,7 +326,7 @@ class HttpFetcher:
             now = time.monotonic()
             if now < state.next_allowed:
                 time.sleep(state.next_allowed - now)
-            state.next_allowed = time.monotonic() + self.min_interval
+            state.next_allowed = time.monotonic() + interval
 
         self._bump()
 
