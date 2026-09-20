@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from .ats.ashby import AshbyAdapter
 from .ats.base import AtsAdapter
 from .ats.greenhouse import GreenhouseAdapter
+from .ats.icims import IcimsAdapter
 from .ats.lever import LeverAdapter
 from .ats.workable import WorkableAdapter
 from .ats.workday import WorkdayAdapter
@@ -51,6 +52,15 @@ CATALOG: dict[str, SourceInfo] = {
         "remote flag but not onsite-versus-hybrid, and no pay. Host robots.txt checked "
         "live 2026-09-15: nothing disallowed.",
     ),
+    "icims": SourceInfo(
+        "icims", "ats", "P1",
+        "Keyless HTML career portals. One search request per term per page of 50 cards, "
+        "plus one job-page request per description (JSON-LD). Costly like Workday, so it "
+        "shares the reserved budget. Tenant robots.txt read live 2026-09-20 on "
+        "careers-48forty, external-92y and resume-chesterton: only referral, login, "
+        "candidate and connect paths disallowed. A tenant's 30 s Crawl-delay would be "
+        "honoured and shows up as few boards read.",
+    ),
     "usajobs": SourceInfo(
         "usajobs", "employer", "P1",
         "The federal government's own applicant system. Free instant key. Real "
@@ -83,6 +93,7 @@ def ats_adapters() -> dict[str, AtsAdapter]:
         "ashby": AshbyAdapter(),
         "workday": WorkdayAdapter(),
         "workable": WorkableAdapter(),
+        "icims": IcimsAdapter(),
     }
 
 

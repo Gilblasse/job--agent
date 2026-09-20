@@ -19,6 +19,7 @@ from jobagent.domain.models import AuthorityTier, WorkplaceType
 from jobagent.ports import FetchError, FetchResponse
 from jobagent.sources.ats.base import TERM_SEPARATOR, BoardTarget
 from jobagent.sources.ats.icims import PAGE_SIZE, IcimsAdapter
+from jobagent.sources.catalog import CATALOG, EXCLUDED, all_adapters, ats_adapters
 from tests.fakes import FakeFetcher, blocked, unavailable
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
@@ -255,3 +256,13 @@ class TestIcimsDetails:
             assert posting.description_html == ""
             assert posting.posted_at is None
             assert posting.salary is None
+
+
+def test_the_catalog_ships_icims():
+    """Registered, planned as a costly server-search platform, and not held back."""
+    adapters = all_adapters()
+    assert len(adapters) == 7
+    assert isinstance(adapters["icims"], IcimsAdapter)
+    assert (CATALOG["icims"].kind, CATALOG["icims"].priority) == ("ats", "P1")
+    assert "icims" not in EXCLUDED
+    assert ats_adapters()["icims"].costly and ats_adapters()["icims"].server_search

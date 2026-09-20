@@ -20,6 +20,7 @@ from jobagent.ports import DiscoveryRequest
 from jobagent.sources.ats.ashby import AshbyAdapter
 from jobagent.sources.ats.base import BoardTarget
 from jobagent.sources.ats.greenhouse import GreenhouseAdapter
+from jobagent.sources.ats.icims import IcimsAdapter
 from jobagent.sources.ats.lever import LeverAdapter
 from jobagent.sources.ats.workable import WorkableAdapter
 from jobagent.sources.ats.workday import WorkdayAdapter
@@ -41,6 +42,7 @@ ADAPTERS = [
     pytest.param(AshbyAdapter(), id="ashby"),
     pytest.param(WorkdayAdapter(), id="workday"),
     pytest.param(WorkableAdapter(), id="workable"),
+    pytest.param(IcimsAdapter(), id="icims"),
 ]
 
 
@@ -88,6 +90,7 @@ def test_robots_policy_resolves_for_every_source_host(fetcher):
         "https://api.lever.co/v0/postings/netflix",
         "https://api.ashbyhq.com/posting-api/job-board/linear",
         "https://apply.workable.com/api/v1/widget/accounts/huggingface",
+        "https://careers-48forty.icims.com/jobs/search?ss=1",
         "https://data.usajobs.gov/api/search",
     ]
     verdicts = {}
