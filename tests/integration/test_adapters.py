@@ -15,12 +15,18 @@ import pytest
 
 from jobagent.domain.dedup import identity_for
 from jobagent.domain.gates import RequirementGate
-from jobagent.domain.models import AuthorityTier, GateOutcome, SourceStatus, WorkplaceType
+from jobagent.domain.models import (
+    AuthorityTier,
+    GateOutcome,
+    RawPosting,
+    SourceStatus,
+    WorkplaceType,
+)
 from jobagent.domain.normalize import build_job
 from jobagent.domain.taxonomy import Taxonomy
 from jobagent.ports import DiscoveryRequest
 from jobagent.sources.ats.ashby import AshbyAdapter
-from jobagent.sources.ats.base import BoardTarget
+from jobagent.sources.ats.base import BoardTarget, prioritize_for_details
 from jobagent.sources.ats.greenhouse import GreenhouseAdapter
 from jobagent.sources.ats.lever import LeverAdapter
 from jobagent.sources.ats.workable import WorkableAdapter
@@ -676,6 +682,100 @@ class TestWorkdayQueriesEveryTerm:
                             only_sources=["workday"])
         sent = plans[0].request.targets[0].extra["search_text"]
         assert TERM_SEPARATOR.join(["Accountant", "Bookkeeper"]) == sent
+
+
+class TestWorkdayDetailBudget:
+    """Two live defects in how a Workday board's request budget was spent.
+
+    Details went to the first ``max_details`` postings in listing order regardless of
+    title, so the budget bought descriptions for unrelated jobs while the one the user
+    asked about stayed blind; and paging ignored the response's ``total``, costing a board
+    with exactly one full page a second request that could only come back empty.
+    """
+
+    def _target(self, search_text: str = "") -> BoardTarget:
+        extra = {"wd": "5", "site": "External"}
+        if search_text:
+            extra["search_text"] = search_text
+        return BoardTarget(company="Acme", token="acme", extra=extra)
+
+    def test_title_matched_postings_are_enriched_first(self):
+        """The list puts the unrelated job first; the one detail request must skip it."""
+        fetcher = FakeFetcher(routes={
+            "/jobs#offset=0": fixture("workday_list"),
+            "Project-Manager_R-1": fixture("workday_detail_1"),
+            "AP-Clerk_R-2": fixture("workday_detail_2"),
+        })
+        WorkdayAdapter(today=date(2026, 9, 14), max_details=1).fetch_board(
+            fetcher, self._target("Accounts Payable")
+        )
+        details = [call.rsplit("/", 1)[-1] for call in fetcher.calls if "/job/" in call]
+        assert details == ["AP-Clerk_R-2"]
+
+    def test_total_ends_pagination_without_an_extra_request(self):
+        """A full page whose ``total`` equals the page size is the whole board."""
+        full_page = {"total": 20, "jobPostings": [
+            {"title": f"Role {i}", "externalPath": f"/job/X/Role_{i}",
+             "locationsText": "Dallas, TX", "postedOn": "Posted 1 Day Ago"}
+            for i in range(20)
+        ]}
+        fetcher = FakeFetcher(routes={"/jobs#offset=0": full_page})
+        postings = WorkdayAdapter(today=date(2026, 9, 14), max_details=0).fetch_board(
+            fetcher, self._target()
+        )
+        assert len(postings) == 20
+        assert not [call for call in fetcher.calls if "#offset=20" in call]
+
+    def test_total_is_per_query_not_cumulative(self):
+        """``total`` describes one query; the first term's total must not end the second."""
+        from jobagent.ports import FetchResponse
+        from jobagent.sources.ats.workday import TERM_SEPARATOR
+
+        answers = {
+            "Accountant": {"total": 1, "jobPostings": [
+                {"title": "Accountant", "externalPath": "/job/Dallas/Accountant_R-9",
+                 "locationsText": "Dallas, TX", "postedOn": "Posted 2 Days Ago"}]},
+            "Accounts Payable": {"total": 1, "jobPostings": [
+                {"title": "Accounts Payable Clerk", "externalPath": "/job/Dallas/AP_R-8",
+                 "locationsText": "Dallas, TX", "postedOn": "Posted 3 Days Ago"}]},
+        }
+
+        class TermAware(FakeFetcher):
+            def post_json(self, url, *, payload, headers=None):
+                self.calls.append(url)
+                body = {"total": 0, "jobPostings": []}
+                if payload["offset"] == 0:
+                    body = answers.get(payload["searchText"], body)
+                return FetchResponse(url=url, status=200, text=json.dumps(body))
+
+        fetcher = TermAware()
+        terms = TERM_SEPARATOR.join(["Accountant", "Accounts Payable"])
+        postings = WorkdayAdapter(today=date(2026, 9, 14), max_details=0).fetch_board(
+            fetcher, self._target(terms)
+        )
+        assert {p.title for p in postings} == {"Accountant", "Accounts Payable Clerk"}
+        assert len(fetcher.calls) == 2  # one list request per term, no second page
+
+    def test_prioritize_for_details_is_stable_and_capped(self):
+        """Matches first, then the rest, each in listing order; word-bounded; capped."""
+        def posting(title: str) -> RawPosting:
+            return RawPosting(source="workday", external_id=title, title=title,
+                              company="Acme", url="https://acme.example/" + title)
+
+        postings = [posting(t) for t in ("Project Manager", "Graphic Designer",
+                                          "Analyst", "Senior Project Manager")]
+
+        def titles(terms: list[str], cap: int) -> list[str]:
+            return [p.title for p in prioritize_for_details(postings, terms, cap)]
+
+        assert titles(["Project Manager"], 4) == [
+            "Project Manager", "Senior Project Manager", "Graphic Designer", "Analyst",
+        ]
+        assert titles(["Project Manager"], 2) == ["Project Manager", "Senior Project Manager"]
+        assert titles(["Project Manager"], 0) == []
+        assert titles([], 2) == ["Project Manager", "Graphic Designer"]
+        # Word boundaries: a bare substring search would move "Graphic Designer" first.
+        assert titles(["AP"], 4) == [p.title for p in postings]
 
 
 class TestProgressUnits:

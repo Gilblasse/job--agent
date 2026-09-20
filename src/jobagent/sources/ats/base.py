@@ -13,6 +13,7 @@ from datetime import date
 from typing import Any
 
 from ...domain.models import AuthorityTier, RawPosting, SourceReport, SourceStatus
+from ...domain.text import contains_phrase
 from ...ports import DiscoveryRequest, DiscoveryResult, Fetcher, FetchError
 from ..base import SourceAdapter, dedupe_postings
 
@@ -245,6 +246,27 @@ def require_ok(response: Any, what: str) -> Any:
     if status == 429:
         raise FetchError(f"{what}: HTTP 429 (rate limited)", blocked=True, status=429)
     raise FetchError(f"{what}: HTTP {status}", status=status)
+
+
+def prioritize_for_details(
+    postings: list[RawPosting], terms: list[str], cap: int
+) -> list[RawPosting]:
+    """Order postings so a detail budget buys descriptions for the jobs asked about.
+
+    A description costs a request, so a board enriches at most ``cap`` postings. Spent in
+    listing order, that budget went to whatever the platform listed first while the title
+    match further down stayed without the text the gates read. Postings whose title
+    contains a term come first, then the rest, each group in its original order. The
+    match is word-bounded: a bare substring would let "AP" hit "Graphic Designer".
+    """
+    if cap <= 0:
+        return []
+
+    def unmatched(posting: RawPosting) -> bool:
+        return not any(contains_phrase(posting.title, term) for term in terms)
+
+    # sorted() is stable, so each group keeps its original order.
+    return sorted(postings, key=unmatched)[:cap]
 
 
 def as_text(value: Any) -> str:
