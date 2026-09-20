@@ -77,31 +77,43 @@ def test_documented_fields_are_still_present(adapter, fetcher):
 
 
 def test_robots_policy_resolves_for_every_source_host(fetcher):
-    """Every shipped source's host must still permit us.
+    """Every shipped source's host must still permit us; every held host must still deny.
 
     A host that disallows us is a real answer, and the right response is to stop
     shipping that adapter -- which is why SmartRecruiters is held back: its API host
     says ``Disallow: /`` for everyone but LinkedInBot. Workable was held on the same
     question until its host was read on 2026-09-15 and found to disallow nothing; this
     test is what notices if that changes.
+
+    USAJOBS is the other way round: ``data.usajobs.gov`` publishes ``Disallow: /`` (read
+    2026-09-15 and 2026-09-20), so the fetcher refuses it and it is a recorded coverage
+    gap, not a source (``.agile/state.md``, next actions). It is listed as HELD so this
+    test notices if the posture changes -- the hold is then lifted deliberately, never
+    bypassed.
     """
-    hosts = [
+    shipped = [
         "https://boards-api.greenhouse.io/v1/boards/stripe/jobs",
         "https://api.lever.co/v0/postings/netflix",
         "https://api.ashbyhq.com/posting-api/job-board/linear",
         "https://apply.workable.com/api/v1/widget/accounts/huggingface",
         "https://careers-48forty.icims.com/jobs/search?ss=1",
-        "https://data.usajobs.gov/api/search",
     ]
-    verdicts = {}
-    for url in hosts:
-        allowed, note = fetcher.robots.allows(url)
-        verdicts[url] = (allowed, note)
+    held = {
+        "https://data.usajobs.gov/api/search": "Disallow: / for every agent; asked, unresolved",
+    }
+    verdicts = {url: fetcher.robots.allows(url) for url in [*shipped, *held]}
     for url, (allowed, note) in verdicts.items():
         print(f"{'ALLOW' if allowed else 'DENY '}  {url}  ({note})")
-    assert all(allowed for allowed, _ in verdicts.values()), (
-        "a source host disallows this crawler; stop shipping that adapter rather than "
-        f"ignoring it: {verdicts}"
+
+    denied = [url for url in shipped if not verdicts[url][0]]
+    assert not denied, (
+        "a shipped source's host disallows this crawler; stop shipping that adapter "
+        f"rather than ignoring it: {denied}"
+    )
+    lifted = [url for url in held if verdicts[url][0]]
+    assert not lifted, (
+        "a held host now permits us; lift the hold deliberately and record why: "
+        f"{[(url, held[url]) for url in lifted]}"
     )
 
 
