@@ -57,6 +57,7 @@ class WorkdayAdapter(AtsAdapter):
     probe_tokens: tuple[str, ...] = ()
     costly: bool = True
     server_search: bool = True
+    tenant_hosts: bool = True
     max_pages: int = 3
     max_details: int = 20
     max_terms: int = 4

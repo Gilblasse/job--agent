@@ -335,6 +335,29 @@ class TestFailureHandling:
         assert result.report.status is SourceStatus.BLOCKED
         assert result.postings == []
 
+    def test_a_blocked_tenant_host_does_not_end_a_tenant_hosted_platform(self):
+        """Every Workday tenant is its own host, so one refusing us says nothing about
+        the next. The first live run at budget 1500 lost every iCIMS board to a single
+        tenant whose robots.txt disallows us, because the loop read that refusal as the
+        platform's host stopping.
+        """
+        fetcher = FakeFetcher(
+            routes={"cxs/t1/": fixture("workday_list")},
+            failures={"cxs/t0/": blocked("t0.wd5.myworkdayjobs.com", status=403)},
+        )
+        targets = [
+            BoardTarget(company=f"C{i}", token=f"t{i}", extra={"wd": "5", "site": "External"})
+            for i in range(2)
+        ]
+        result = WorkdayAdapter(max_details=0).discover(
+            DiscoveryRequest(fetcher=fetcher, budget=50, targets=targets)
+        )
+        assert result.report.status is SourceStatus.PARTIAL
+        assert len(result.postings) == 2
+        assert "1/2 boards read" in result.report.note
+        outcomes = result.report.__dict__["outcomes"]
+        assert [o.failure_kind for o in outcomes] == ["blocked", ""]
+
     def test_unreachable_boards_report_unavailable_without_raising(self):
         fetcher = FakeFetcher(failures={"greenhouse": unavailable()})
         result = GreenhouseAdapter().discover(self._request(fetcher))
@@ -471,7 +494,10 @@ class TestWorkdayEnrichmentFailures:
         result = WorkdayAdapter(today=date(2026, 9, 14)).discover(
             DiscoveryRequest(fetcher=fetcher, budget=5, targets=[target])
         )
-        assert result.report.status is SourceStatus.BLOCKED
+        # Every Workday tenant is its own host, so the throttle is this tenant's answer:
+        # its board is reported unavailable (kind rate_limited), never healthy.
+        assert result.report.status is SourceStatus.UNAVAILABLE
+        assert result.report.__dict__["outcomes"][0].failure_kind == "rate_limited"
 
     def test_a_missing_description_alone_does_not_fail_the_board(self):
         from jobagent.ports import FetchError

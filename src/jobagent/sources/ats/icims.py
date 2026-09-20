@@ -68,7 +68,6 @@ PAGE_SIZE = 50
 _JSON_LD = re.compile(r"<script\b[^>]*application/ld\+json[^>]*>(.*?)</script>", re.S)
 _PERIODS = ("hour", "day", "week", "month", "year")
 
-_TABLE = "iCIMS_JobsTable"
 _CARD = 'class="iCIMS_JobCardItem"'
 _ANCHOR = re.compile(r"<a\b[^>]*\biCIMS_Anchor\b[^>]*>")
 _HREF = re.compile(r'href="([^"]*)"')
@@ -87,6 +86,7 @@ class IcimsAdapter(AtsAdapter):
     probe_tokens: tuple[str, ...] = ("careers-48forty", "external-92y", "resume-chesterton")
     costly: bool = True
     server_search: bool = True
+    tenant_hosts: bool = True
     max_pages: int = 3
     max_terms: int = 4
     max_details: int = 20  # job-page reads per board, spent by the detail pass
@@ -232,8 +232,12 @@ def _search_url(token: str, term: str, page: int) -> str:
 def _cards(page: str) -> list[dict[str, str]]:
     """Each job card as a flat dict: id, href, title, teaser, and every labelled field.
 
-    A page that has the job table but yields no cards is a layout change, not an empty
-    board, and is raised as such so the board is reported as a parse error.
+    A page whose header claims a page count ("Page 1 of 3") but yields no cards is a
+    layout change, not an empty board, and is raised as such so the board is reported as
+    a parse error. A keyword search with no matches has no cards and no page count (the
+    portal says "Sorry, no jobs were found"), and that is an empty board; the job-table
+    class name alone proves nothing, because the portal's own script mentions it on every
+    page.
     """
     cards: list[dict[str, str]] = []
     # ponytail: cards are sibling <li> with no nesting, so a split on the class marker and
@@ -256,8 +260,8 @@ def _cards(page: str) -> list[dict[str, str]]:
             teaser=html_to_text(teaser.group(1)) if teaser else "",
         )
         cards.append(card)
-    if not cards and _TABLE in page:
-        raise ValueError("icims: job table present but no cards parsed")
+    if not cards and _PAGE_OF.search(page):
+        raise ValueError("icims: page reports results but no cards parsed")
     return cards
 
 

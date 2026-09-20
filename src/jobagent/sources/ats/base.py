@@ -58,6 +58,10 @@ class AtsAdapter(SourceAdapter):
     costly: bool = False
     # The platform accepts the search terms, so they are pushed down to it.
     server_search: bool = False
+    # Every tenant is its own host (acme.wd5.myworkdayjobs.com, careers-acme.icims.com),
+    # so one tenant refusing or throttling us says nothing about the next one. On a
+    # shared API host the same refusal means the platform has stopped serving us.
+    tenant_hosts: bool = False
 
     # -- subclass hooks -----------------------------------------------------------
 
@@ -113,9 +117,11 @@ class AtsAdapter(SourceAdapter):
             outcome, found = self._read_board(fetcher, target, request.today)
             outcomes.append(outcome)
             postings.extend(found)
-            if outcome.failure_kind in ("rate_limited", "blocked"):
+            if outcome.failure_kind in ("rate_limited", "blocked") and not self.tenant_hosts:
                 blocked = True
             elif not outcome.ok:
+                # On a tenant-hosted platform a refusal is that tenant's answer alone: the
+                # first live run at scale lost 248 iCIMS boards to one tenant's robots.txt.
                 failures += 1
             # Outside the read, so a fault in a progress display is never recorded
             # against the board as a parse error.
@@ -164,9 +170,9 @@ class AtsAdapter(SourceAdapter):
             found = self.fetch_board(fetcher, target, today)
         except FetchError as error:
             if error.blocked:
-                # The host has stopped serving us. Every remaining board on this
-                # platform lives behind the same hostname, so continuing would be
-                # both futile and rude.
+                # The host has stopped serving us. On a shared API host every remaining
+                # board lives behind the same hostname, so the loop above stops; on a
+                # tenant-hosted platform it moves on to the next tenant.
                 kind = "rate_limited" if error.status == 429 else "blocked"
             else:
                 # 404 means the tenant is gone and should count against the board;

@@ -15,8 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from jobagent.domain.models import AuthorityTier, WorkplaceType
-from jobagent.ports import FetchError, FetchResponse
+from jobagent.domain.models import AuthorityTier, SourceStatus, WorkplaceType
+from jobagent.ports import DiscoveryRequest, FetchError, FetchResponse
 from jobagent.sources.ats.base import TERM_SEPARATOR, BoardTarget
 from jobagent.sources.ats.icims import PAGE_SIZE, IcimsAdapter
 from jobagent.sources.catalog import CATALOG, EXCLUDED, all_adapters, ats_adapters
@@ -155,9 +155,14 @@ class TestIcims:
         assert info.value.status == 404
 
     def test_a_table_with_no_cards_is_a_parse_error(self):
-        """A job table whose cards no longer parse is a changed layout and must surface as
-        a parse error, never as a healthy empty board; no table at all is empty."""
-        broken = FakeFetcher(routes={SEARCH: '<ul class="container-fluid iCIMS_JobsTable"></ul>'})
+        """A page whose header claims results but whose cards no longer parse is a changed
+        layout and must surface as a parse error, never as a healthy empty board. The
+        job-table class name alone is not the claim: the portal's script names it on a
+        no-results page too (live, 2026-09-20), so no page count means empty."""
+        broken = FakeFetcher(routes={SEARCH: (
+            '<h2 class="iCIMS_SearchResultsHeader">Page 1 of 2</h2>'
+            '<ul class="container-fluid iCIMS_JobsTable"></ul>'
+        )})
         with pytest.raises(ValueError):
             IcimsAdapter().fetch_board(broken, acme())
 
@@ -266,3 +271,52 @@ def test_the_catalog_ships_icims():
     assert (CATALOG["icims"].kind, CATALOG["icims"].priority) == ("ats", "P1")
     assert "icims" not in EXCLUDED
     assert ats_adapters()["icims"].costly and ats_adapters()["icims"].server_search
+
+
+EMPTY = (FIXTURES / "icims_search_empty.html").read_text(encoding="utf-8")
+
+
+class TestIcimsTenantsAreTheirOwnHosts:
+    """Findings from the first live run at budget 1500, 2026-09-20."""
+
+    def test_an_empty_keyword_search_is_an_empty_board(self):
+        """A keyword search with no matches carries the job-table class name in the
+        portal's script but no cards and no page count; that is an empty board, not a
+        layout change. Two live tenants were reported as parse errors this way.
+        """
+        fetcher = FakeFetcher(routes={SEARCH: EMPTY})
+        adapter = IcimsAdapter(max_details=0)
+        assert adapter.fetch_board(fetcher, acme(search_text="Project Manager")) == []
+        assert len(searches(fetcher)) == 1
+
+        claims_results = (
+            '<h2 class="iCIMS_SearchResultsHeader">Page 1 of 1</h2>'
+            '<ul class="iCIMS_JobsTable"></ul>'
+        )
+        with pytest.raises(ValueError):
+            IcimsAdapter(max_details=0).fetch_board(
+                FakeFetcher(routes={SEARCH: claims_results}), acme()
+            )
+
+    def test_a_refusing_tenant_does_not_end_the_platform(self):
+        """The alphabetically first iCIMS tenant's robots.txt disallows us; treating that
+        one refusal as the platform's host stopping skipped the other 248 boards.
+        """
+        fetcher = FakeFetcher(
+            routes={SEARCH: FIXTURE},
+            failures={
+                "careers-refuses.icims.com": blocked("careers-refuses.icims.com", status=403),
+            },
+        )
+        targets = [
+            BoardTarget(company="Refuses", token="careers-refuses"),
+            acme(),
+        ]
+        result = IcimsAdapter(max_details=0).discover(
+            DiscoveryRequest(fetcher=fetcher, budget=50, targets=targets)
+        )
+        assert result.report.status is SourceStatus.PARTIAL
+        assert len(result.postings) == 3
+        assert "1/2 boards read" in result.report.note
+        outcomes = result.report.__dict__["outcomes"]
+        assert [o.failure_kind for o in outcomes] == ["blocked", ""]
