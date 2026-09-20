@@ -56,7 +56,7 @@
   "lists": [
    {
     "text": "What You’ll Do",
-    "content": "<div><li>Own the AP cycle</li><li>Close the books</li></div>"
+    "content": "<div><li><p>Own the AP cycle</p></li><li><p>Close the books</p></li></div>"
    },
    {
     "text": "Requirements",
@@ -64,7 +64,7 @@
    },
    {
     "text": "Benefits",
-    "content": "<div><li>401k match</li></div>"
+    "content": "<div><li><p>401k match</p></li></div>"
    }
   ],
   "additional": "<p>Equal opportunity employer.</p>",

@@ -33,13 +33,18 @@ class _TextExtractor(HTMLParser):
         super().__init__(convert_charrefs=True)
         self._parts: list[str] = []
         self._skip_depth = 0
+        # True from a bullet marker until its first text. Lever and Greenhouse publish
+        # ``<li><p>text</p></li>``; letting that ``<p>`` break the line left a lone "-"
+        # and put the bullet text on a line of its own, where it read as a heading.
+        self._fresh_bullet = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag in _SKIP_CONTENT:
             self._skip_depth += 1
         elif tag == "li":
             self._parts.append("\n- ")
-        elif tag in _BLOCK_TAGS:
+            self._fresh_bullet = True
+        elif tag in _BLOCK_TAGS and not self._fresh_bullet:
             self._parts.append("\n")
 
     def handle_endtag(self, tag: str) -> None:
@@ -47,10 +52,13 @@ class _TextExtractor(HTMLParser):
             self._skip_depth -= 1
         elif tag in _BLOCK_TAGS:
             self._parts.append("\n")
+            self._fresh_bullet = False
 
     def handle_data(self, data: str) -> None:
-        if not self._skip_depth:
-            self._parts.append(data)
+        if self._skip_depth or (self._fresh_bullet and not data.strip()):
+            return
+        self._parts.append(data)
+        self._fresh_bullet = False
 
     def text(self) -> str:
         return "".join(self._parts)

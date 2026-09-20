@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from jobagent.domain.text import find_phrase
+from jobagent.domain.text import find_phrase, html_to_text
 
 
 class TestWordJoinsAreFlexible:
@@ -50,3 +50,28 @@ class TestShortWordsMatchAsWords:
     def test_a_single_letter_matches_wherever_it_stands_alone(self):
         assert find_phrase("Plan C for the launch", "c") is not None
         assert find_phrase("cloud services", "c") is None
+
+
+class TestBulletsStayOnOneLine:
+    """Section detection reads line by line, so a bullet split from its marker is a
+    short capitalised line with no punctuation: exactly what a heading looks like."""
+
+    def test_a_paragraph_inside_a_bullet_keeps_its_marker(self):
+        """Lever and Greenhouse wrap bullet text in a paragraph, and the paragraph's line
+        break used to leave a lone "-" with the bullet text on the next line."""
+        lines = html_to_text(
+            "<div><li><p>Own the AP cycle</p></li><li><p>Close the books</p></li></div>"
+        ).split("\n")
+        assert "- Own the AP cycle" in lines
+        assert "- Close the books" in lines
+        assert "-" not in lines
+
+        mixed = html_to_text("<ul><li>Plain</li><li><p>Wrapped</p></li></ul>").split("\n")
+        assert "- Plain" in mixed
+        assert "- Wrapped" in mixed
+
+        headed = html_to_text("<h3>What You’ll Do</h3><div><li><p>Own it</p></li></div>")
+        assert headed.startswith("What You’ll Do\n")
+        assert "- Own it" in headed.split("\n")
+
+        assert html_to_text("<li>one<br>two</li>") == "- one\ntwo"
