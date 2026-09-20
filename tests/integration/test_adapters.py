@@ -100,7 +100,7 @@ class TestLever:
         assert "Requirements\n- Active CPA license required" in text
         assert text.endswith("Equal opportunity employer.")
         html = self.postings[2].description_html
-        assert "<h3>Requirements</h3><div><li>Active CPA license required</li>" in html
+        assert "<h3>Requirements</h3><div><li><p>Active CPA license required</p></li>" in html
 
     def test_a_requirement_stated_only_in_a_list_is_detected(self):
         """A "CPA required" bullet under Requirements lives in ``lists``, so the
