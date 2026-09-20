@@ -13,7 +13,11 @@ from pathlib import Path
 
 import pytest
 
-from jobagent.domain.models import AuthorityTier, SourceStatus, WorkplaceType
+from jobagent.domain.dedup import identity_for
+from jobagent.domain.gates import RequirementGate
+from jobagent.domain.models import AuthorityTier, GateOutcome, SourceStatus, WorkplaceType
+from jobagent.domain.normalize import build_job
+from jobagent.domain.taxonomy import Taxonomy
 from jobagent.ports import DiscoveryRequest
 from jobagent.sources.ats.ashby import AshbyAdapter
 from jobagent.sources.ats.base import BoardTarget
@@ -81,6 +85,34 @@ class TestLever:
 
     def test_epoch_milliseconds_become_a_date(self):
         assert isinstance(self.postings[0].posted_at, date)
+
+    def test_lists_join_the_body_under_their_headings(self):
+        """Lever splits a posting across ``description``, ``lists`` and ``additional``;
+        reading only the first meant duties and requirements never reached the gates."""
+        text = self.postings[2].description_text
+        assert "What You’ll Do\n- Own the AP cycle" in text
+        assert "Requirements\n- Active CPA license required" in text
+        assert text.endswith("Equal opportunity employer.")
+        html = self.postings[2].description_html
+        assert "<h3>Requirements</h3><div><li>Active CPA license required</li>" in html
+
+    def test_a_requirement_stated_only_in_a_list_is_detected(self):
+        """A "CPA required" bullet under Requirements lives in ``lists``, so the
+        requirement gate never saw it and let the posting through."""
+        posting = self.postings[2]
+        job = build_job(posting, Taxonomy.default(), identity_for(
+            posting.company, posting.title, posting.location_raw, posting.country_hint
+        ))
+        gate = RequirementGate(term="CPA", when="required")
+        result = gate.evaluate(job, Taxonomy.default(), date(2026, 9, 14))
+        assert result.outcome is GateOutcome.FAIL
+        assert "CPA license required" in result.detail
+
+    def test_a_posting_without_lists_is_unchanged(self):
+        """A board that publishes only the opening paragraph reads exactly as before."""
+        raw = fixture("lever_board")[0]
+        assert self.postings[0].description_text == raw["descriptionPlain"]
+        assert self.postings[0].description_html == raw["description"]
 
 
 class TestAshby:

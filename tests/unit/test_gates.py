@@ -16,6 +16,7 @@ from jobagent.domain.gates import (
     TitleExcludesGate,
     UnverifiablePolicy,
     WorkplaceGate,
+    responsibility_text,
 )
 from jobagent.domain.models import GateOutcome, WorkplaceType
 from tests.conftest import TODAY, make_job
@@ -489,3 +490,13 @@ class TestSpecStaysInScope:
         from jobagent.domain.spec import SearchSpec
 
         assert SearchSpec(name="t", countries=[]).countries == ["US"]
+
+
+class TestSectionHeadings:
+    def test_curly_apostrophe_headings_are_recognised(self, taxonomy):
+        """Employers write "What You’ll Do" with U+2019; compared against the taxonomy's
+        ASCII apostrophe it never matched, so the whole body was read as the work."""
+        text = "What You’ll Do\n- Own AP\n- Close books\n\nWho You Are\n- Careful\n"
+        work = responsibility_text(text, taxonomy)
+        assert "Own AP" in work and "Close books" in work
+        assert "Careful" not in work

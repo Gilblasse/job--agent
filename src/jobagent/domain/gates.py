@@ -89,7 +89,7 @@ def _heading_context(text: str, position: int, taxonomy: Taxonomy) -> str | None
     marker at all. Without this, every such posting would read as UNSTATED and the gate
     would be useless on exactly the documents it matters most for.
     """
-    window = text[max(0, position - 1500):position].lower()
+    window = text[max(0, position - 1500):position].lower().replace("’", "'")
 
     # Ranked by where the heading ENDS, then by its length. Both parts matter: the
     # nearest heading wins, and on a tie the more specific one does. Without the length
@@ -322,7 +322,7 @@ _BULLET = ("-", "*", "\u2022", "\u25e6", "\u2013", "\u2014", ">", "#")
 def _as_heading(line: str) -> str:
     """A line reduced to what it would be as a heading: no bullet, no trailing colon."""
     stripped = line.strip().lstrip("".join(_BULLET) + " ").rstrip(" :\u2013\u2014-")
-    return " ".join(stripped.split()).lower()
+    return " ".join(stripped.split()).lower().replace("\u2019", "'")
 
 
 def _display_heading(line: str) -> str:

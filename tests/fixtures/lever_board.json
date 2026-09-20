@@ -38,5 +38,37 @@
   "hostedUrl": "https://jobs.lever.co/acme/l-2",
   "descriptionPlain": "Hybrid role, 3 days onsite.",
   "createdAt": 1788000000000
+ },
+ {
+  "id": "l-3",
+  "text": "Accounts Payable Specialist",
+  "categories": {
+   "location": "Austin, TX",
+   "team": "Finance",
+   "commitment": "Full-time"
+  },
+  "country": "US",
+  "workplaceType": "on-site",
+  "hostedUrl": "https://jobs.lever.co/acme/l-3",
+  "applyUrl": "https://jobs.lever.co/acme/l-3/apply",
+  "descriptionPlain": "Acme is hiring an Accounts Payable Specialist to join our Finance team.",
+  "description": "<p>Acme is hiring an Accounts Payable Specialist to join our Finance team.</p>",
+  "lists": [
+   {
+    "text": "What You’ll Do",
+    "content": "<div><li>Own the AP cycle</li><li>Close the books</li></div>"
+   },
+   {
+    "text": "Requirements",
+    "content": "<div><li>Active CPA license required</li><li>3+ years experience</li></div>"
+   },
+   {
+    "text": "Benefits",
+    "content": "<div><li>401k match</li></div>"
+   }
+  ],
+  "additional": "<p>Equal opportunity employer.</p>",
+  "additionalPlain": "Equal opportunity employer.",
+  "createdAt": 1788000000000
  }
 ]
