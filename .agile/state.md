@@ -30,7 +30,7 @@ user outcomes.
 
 ## M13 — data-sourcing accuracy and reach, 2026-09-20
 
-Depth: Full. Branch `claude/data-sourcing-accuracy`, sixteen commits on top of `b67b3e9`
+Depth: Full. Branch `claude/data-sourcing-accuracy`, eighteen commits on top of `b67b3e9`
 (this record the last), planned and gated under `.unlazy/sourcing/`. The question was whether the results were
 wrong because the market is thin or because the tool was reading it badly; both, it
 turned out, and each finding below is pinned in a fixture or a test.
@@ -61,15 +61,28 @@ turned out, and each finding below is pinned in a fixture or a test.
   tolerates a duplicate column from a concurrent connection.
 - **The live robots test records the USAJOBS hold** (decision 59) instead of failing on
   it.
+- **A refusing tenant does not end a tenant-hosted platform** (decision 61). The first
+  live run at the 1,500 budget read 0/249 iCIMS boards: `careers-142designgroup`,
+  alphabetically first, publishes a `robots.txt` that disallows us, and the shared loop
+  took that one refusal for the platform's host stopping. Workday and iCIMS tenants are
+  their own hosts (`AtsAdapter.tenant_hosts`), so a blocked tenant is now reported
+  unavailable and fan-out continues. The same run showed a keyword search with no
+  matches carries the job-table class name but no cards and no page count; the no-cards
+  guard now requires the header's page count before calling a page a layout change.
 
 Verified offline: 774 tests pass, `ruff` clean. Verified live from the user's network on
 2026-09-20: robots ALLOW for the Greenhouse API (`Disallow: /embed/` only), the Lever API,
 the Ashby API (401, so no file), Workable and iCIMS; DENY for `data.usajobs.gov`. The
 iCIMS probe reached `careers-48forty` and parsed 150 postings from three list requests;
 both iCIMS live tests pass. Lever probe tokens refreshed (netflix and plaid are gone).
-**Not verified:** a full example search at the 1,500 budget over the grown registry, and
-anything against Turso — `jobagent cloud init` against a real cloud database with
-migration 6 is the user's step.
+Verified live at the 1,500 budget, `examples/pm-dfw-hybrid.yml` over the grown registry
+(2026-09-20, after decision 61): greenhouse 235/293 boards read, workable 341/342, ashby
+145/154, lever 69/111 (paced at 1 s by its Crawl-delay, no throttling), workday 16/351
+and icims 26/249, the rest of the two costly platforms not reached within the budget;
+27,767 postings, 7 matches for the hardest search. Before decision 61 the same run read
+0/249 iCIMS boards and 16/351 Workday boards.
+**Not verified:** anything against Turso — `jobagent cloud init` against a real cloud
+database with migration 6 is the user's step.
 
 Retrospective: every adapter defect here was in a shape the vendor publishes and no
 fixture carried — a nested object, a second array of sections, a Unicode apostrophe, a

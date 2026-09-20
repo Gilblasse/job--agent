@@ -395,7 +395,13 @@ sections were not part of the posting text, so a credential demanded in a Requir
 bullet never reached the requirement gate; that a heading written with a curly apostrophe
 ("What You’ll Do") never matched the section taxonomy; and that a `<li><p>` bullet lost
 its marker to a line break, so a short capitalised bullet read as a heading. All four are
-fixed and pinned in the fixtures.
+fixed and pinned in the fixtures. The first run of `pm-dfw-hybrid` at the 1,500 budget
+over the grown registry then read 0/249 iCIMS boards: the alphabetically first tenant's
+`robots.txt` disallows us, and the fan-out loop took that one refusal for the platform's
+host stopping. Tenants are their own hosts on Workday and iCIMS, so a refusal now ends
+only that tenant. The rerun read greenhouse 235/293, workable 341/342, ashby 145/154,
+lever 69/111, workday 16/351 and icims 26/249 boards — 27,767 postings, 7 matches for
+the hardest search — with Lever paced at 1 s by its `Crawl-delay` and nothing throttled.
 
 `pytest -m live` holds tests that hit real endpoints. They are excluded by default so CI
 never depends on third-party uptime.
