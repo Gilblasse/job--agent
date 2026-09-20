@@ -3,8 +3,9 @@
 **Product Goal:** a profession-agnostic CLI that finds jobs on employer ATS boards,
 filters them hard with stated reasons, and remembers what it has shown.
 
-**Status:** implemented, locally verified, and live-validated on a home network
-(2026-09-14 and 2026-09-15). Not yet validated through real user outcomes.
+**Status:** implemented, locally verified, and live-validated from the user's network
+(2026-09-14, 2026-09-15 and 2026-09-20; six ATS adapters). Not yet validated through real
+user outcomes.
 
 **Depth:** Full — multi-component, external dependencies, new subsystem.
 **Mode:** autonomous scope; all six milestones delivered in one pass.
@@ -25,6 +26,57 @@ filters them hard with stated reasons, and remembers what it has shown.
 | M10 | Wizard: preview crash, scope-labelled prompts, flexible compounds, short-entry check | done, uncommitted |
 | M11 | Run progress bar, job ids and links in results, `dismiss` with reasons that teach the search | done |
 | M12 | Web version: Indeed-style search screen, FastAPI API on Vercel, Turso database, GitHub Actions runner | built, not yet deployed |
+| M13 | Data-sourcing accuracy and reach: iCIMS adapter, three-list seed, reserved budget share, learned fan-out order, Crawl-delay, adapter text defects | done |
+
+## M13 — data-sourcing accuracy and reach, 2026-09-20
+
+Depth: Full. Branch `claude/data-sourcing-accuracy`, sixteen commits on top of `b67b3e9`
+(this record the last), planned and gated under `.unlazy/sourcing/`. The question was whether the results were
+wrong because the market is thin or because the tool was reading it badly; both, it
+turned out, and each finding below is pinned in a fixture or a test.
+
+- **Adapters read what the vendors publish** (decision 58 and the fixtures). Ashby pay
+  was read from a top-level key the live API never sends, so it was empty on every Ashby
+  board; it is read from the nested `compensation` object (structured Salary component,
+  then summary components, then summary strings). Lever's headed `lists` and `additional`
+  blocks now join the posting text under their headings, so a credential demanded in a
+  Requirements bullet reaches the requirement gate. A heading written with U+2019 never
+  matched the taxonomy; `<li><p>` bullets lost their marker to a line break and read as
+  headings. Workday details go to title-matched postings first and paging stops at each
+  query's own total.
+- **iCIMS ships** (`sources/ats/icims.py`, decision 54): HTML search pages per term,
+  50 cards a page, `searchKeyword` pushdown; job-page JSON-LD for title matches first,
+  replacing the teaser in text and HTML, with `datePosted`, address and `baseSalary`
+  (unit stated, else by magnitude). Discovery recognises `*.icims.com` tenants, dedup
+  ranks the host as an official ATS, `parse_location` reads `US-FL-Bartow`.
+- **The seed grew from 1,766 to 28,562 boards** (`scripts/build_seed.py`, decision 55):
+  workable 8,522, greenhouse 7,310, ashby 3,856, workday 3,572, lever 2,764, icims
+  2,538; 693 US-flagged. SmartRecruiters rows dropped. Gzip, deterministic. Seeding runs
+  in one transaction (decision 60).
+- **The budget reserves 40% for costly platforms** (decision 52) and the default is 1,500
+  (decision 57). `infra/http.py` honours `Crawl-delay` (decision 53; Lever asks for 1 s).
+- **Fan-out order learns** (decision 56): migration 6 adds `us_share`; measured-US first,
+  untried next, measured non-US last; least-recently-tried tiebreak; the runner tops the
+  cloud registry up from the seed after `pull`, case-insensitively; `Store.migrate`
+  tolerates a duplicate column from a concurrent connection.
+- **The live robots test records the USAJOBS hold** (decision 59) instead of failing on
+  it.
+
+Verified offline: 774 tests pass, `ruff` clean. Verified live from the user's network on
+2026-09-20: robots ALLOW for the Greenhouse API (`Disallow: /embed/` only), the Lever API,
+the Ashby API (401, so no file), Workable and iCIMS; DENY for `data.usajobs.gov`. The
+iCIMS probe reached `careers-48forty` and parsed 150 postings from three list requests;
+both iCIMS live tests pass. Lever probe tokens refreshed (netflix and plaid are gone).
+**Not verified:** a full example search at the 1,500 budget over the grown registry, and
+anything against Turso — `jobagent cloud init` against a real cloud database with
+migration 6 is the user's step.
+
+Retrospective: every adapter defect here was in a shape the vendor publishes and no
+fixture carried — a nested object, a second array of sections, a Unicode apostrophe, a
+paragraph inside a list item. The fixtures were built from documented schemas, and the
+documentation was not wrong; it was incomplete. **Improvement carried forward:** when an
+adapter is first read live, save one real board as a fixture beside the documented one,
+and diff the field coverage between them before trusting either.
 
 ## M12 — the web version, 2026-09-18
 
@@ -111,6 +163,11 @@ rather than reasoning about which statement it must be.
 
 - 604 tests pass (`pytest -q`), plus 14 live tests deselected by default.
   `ruff check src tests scripts` clean.
+- 2026-09-20 (M13): 774 offline tests pass, 17 deselected (live and e2e); `ruff` clean.
+  Live from the user's network: the robots sweep answered ALLOW for the Greenhouse, Lever
+  and Ashby APIs, Workable and iCIMS, and DENY for `data.usajobs.gov`; the iCIMS probe
+  parsed 150 postings from `careers-48forty` in three list requests; `sources doctor`
+  is what the user runs next, at the 1,500 budget over the 28k-board registry.
 - Genericity proven the hard way: one corpus, three unrelated searches, different correct
   answers, no code change. A test parses `src/` and fails on profession-specific terms in
   executable code.
@@ -392,20 +449,43 @@ deduplication and dead caching scaffolding.
 
 ## Next actions
 
-1. **User:** send `.agile/commoncrawl-question.md` to the Common Crawl group. Their answer
+1. **User, before deploying this runner:** `TURSO_DATABASE_URL=... TURSO_AUTH_TOKEN=...
+   jobagent cloud init`. It applies migration 6 (`company_registry.us_share`) and tops
+   the cloud registry up from the 28k-board seed. The runner does not migrate the cloud
+   itself; against an un-migrated database it fails at `pull` rather than running
+   degraded. Safe to repeat.
+2. **Rebase `claude/web-spa`** onto this branch. Its working tree carries an uncommitted
+   hunk in `web/src/types.ts` (removes `DismissedItem`, `RegistryResponse` and
+   `SourcesResponse`); this branch changes one line of the same file (`source_budget:
+   1500` in the default spec). The hunks do not overlap, but the file is the same.
+3. **CI, before the first PR from this branch:** `.github/workflows/ci.yml` runs only on
+   pushes to `main` and on pull requests, and its unit job installs the `dev` extra
+   alone. `tests/e2e/test_search_flow.py` imports `playwright` at module level, so
+   pytest imports it during collection even though the `e2e` marker deselects it —
+   without `pytest-playwright` installed that is a collection error, not a skip. Either
+   install `.[dev,e2e]` in the unit job too or guard the import with
+   `pytest.importorskip`. Not touched here; it is outside this branch's scope and the
+   local venv has both extras, which is why it never showed.
+4. **User, deferred by choice on 2026-09-15:** USAJOBS. `data.usajobs.gov/robots.txt`
+   still says `Disallow: /` (read 2026-09-15 and 2026-09-20); the fetcher will refuse
+   the API even with a key, and the live robots test now records the hold (decision 59)
+   so a change is noticed. Same question as Common Crawl (decision 26): ask USAJOBS
+   whether the file covers clients of the documented, keyed API. The README's
+   federal-coverage claim stays annotated as unverified.
+5. **Deferred:** `targets_for(limit=...)` still selects `limit` boards for what is a
+   request allowance, so a costly platform's coverage note can say "N more not reached"
+   when the requests, not the boards, ran out. Making the planner translate requests to
+   boards needs a per-board cost estimate from the adapter; not built.
+6. **User:** send `.agile/commoncrawl-question.md` to the Common Crawl group. Their answer
    decides whether `company discover` ships. No bypass in the meantime.
-2. **User, deferred by choice on 2026-09-15:** USAJOBS. Before getting a key, note that
-   `pytest -m live -k robots` found `data.usajobs.gov/robots.txt` says `Disallow: /`
-   (read 2026-09-15). The fetcher will refuse the API even with a key. Same question as
-   Common Crawl (decision 26): ask USAJOBS whether the file covers clients of the
-   documented, keyed API. No code was changed; the README's federal-coverage claim is
-   annotated as unverified.
-3. Registry growth is now the only lever left for reach. With Common Crawl held, the
-   routes are `company add` / `company import` from the user's own lists; nothing in the
-   backlog changes that without a cross-company index.
-4. Observation, not an action: SmartRecruiters' `Allow` for LinkedInBot suggests they
+7. Registry growth beyond the seed: with Common Crawl held, the routes are `company add`
+   / `company import` from the user's own lists and a re-run of `scripts/build_seed.py`
+   when the three source lists are refreshed. Nothing in the backlog changes that without
+   a cross-company index.
+8. Observation, not an action: SmartRecruiters' `Allow` for LinkedInBot suggests they
    would consider named exceptions. Asking them is an external communication and the
-   user's call.
+   user's call. Its rows are no longer seeded (decision 55); the platform stays in
+   `sources list` as excluded.
 
 ## Retrospective — M9
 

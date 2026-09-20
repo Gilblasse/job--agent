@@ -113,7 +113,7 @@ export function emptySpec(name = "Untitled search"): SearchSpec {
     max_age_days: null,
     unverifiable_policy: "flag",
     ranking: { ...DEFAULT_RANKING },
-    source_budget: 400,
+    source_budget: 1500,
   };
 }
 

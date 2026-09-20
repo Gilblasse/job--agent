@@ -127,7 +127,7 @@ class SearchSpec(BaseModel):
     max_age_days: int | None = None
     unverifiable_policy: Literal["flag", "strict"] = "flag"
     ranking: RankingWeights = Field(default_factory=RankingWeights)
-    source_budget: int = 400
+    source_budget: int = 1500
 
     @field_validator("countries")
     @classmethod

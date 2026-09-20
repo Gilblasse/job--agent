@@ -55,9 +55,10 @@ also what makes the cloud evolution below a swap rather than a rewrite.
 | `domain/dedup.py` | Identity keys, URL canonicalization, authority tiers |
 | `domain/taxonomy.py` | Profession-neutral vocabulary, overridable as data |
 | `ports.py` | `Fetcher`, `Clock`, `SourceAdapter`, `JobRepository` |
-| `infra/http.py` | The only network egress: robots, rate limiting, backoff |
+| `infra/http.py` | The only network egress: robots (including `Crawl-delay`), rate limiting, backoff |
 | `infra/store.py` | SQLite persistence and the new-versus-seen question |
 | `sources/ats/*` | Per-platform adapters |
+| `sources/ats/icims.py` | iCIMS career portals: HTML search pages per term, JSON-LD job pages for title matches first |
 | `sources/registry.py` | Seeding, growth, and fan-out ordering |
 | `sources/discovery.py` | Careers URL → ATS board |
 | `sources/commoncrawl.py` | Common Crawl index → employer boards; bounded, resumable sweeps |
@@ -110,7 +111,11 @@ remembering to be polite.
 
 Rate limiting is per **host**, not per company, because several platforms concentrate
 thousands of tenants behind one hostname; a per-tenant model turns a fan-out into a
-self-inflicted rate-limit storm.
+self-inflicted rate-limit storm. The per-host interval is a floor, not the pace: a host's
+robots `Crawl-delay` widens it, up to 30 seconds, and never narrows it. `api.lever.co`
+asks for one second. The robots fetch itself runs at the floor, because the delay is not
+known until that file has been read, and the cap keeps one hostile or mistyped value from
+stalling a run behind a single host.
 
 ### Rate-limited is not gone
 
@@ -118,6 +123,20 @@ self-inflicted rate-limit storm.
 throttled board is recorded but never counted against, because the boards most worth
 reading are the ones most likely to throttle, and conflating the two is how a registry
 quietly loses its best sources.
+
+**Fan-out order learns.** Each board read records `us_share`, the share of its postings
+located in the US (a posting's country hint, else `detect_country` on its location), and
+`registry_targets` orders by `COALESCE(us_share, CASE us_signal WHEN 1 THEN 0.75 ELSE
+0.5 END) DESC` — measured-US boards first, then untried boards (a US flag from the source
+lists ranks above no flag), then measured non-US boards, whatever the imported flag said.
+The tiebreak is `consecutive_failures ASC, last_verified ASC NULLS FIRST, company ASC`:
+least recently tried first, where it used to be most recent success first, because with
+28k boards and a budget of a few hundred requests per platform the old tiebreak re-read
+the same few hundred boards every run and never reached the rest. A failed read writes
+`COALESCE(?, us_share)`, so the last measurement survives a bad day. Migration 6 adds the
+column; `ALTER TABLE ADD COLUMN` has no `IF NOT EXISTS`, so `Store.migrate` tolerates a
+"duplicate column" error from a second connection that lost the race to apply it, the
+first having already recorded the version (sqlite3 and Turso alike).
 
 ## Known trade-offs
 
@@ -134,9 +153,26 @@ as a rank silently deletes every project-management role from a search excluding
 management; not reading it as one merely shows some roles the user can exclude by title.
 The recoverable error is the better one. — `domain/taxonomy.py`
 
-**Workday costs a request per description.** Capped rather than unlimited. Without
-descriptions the workplace and requirement gates cannot reach a verdict, which is exactly
-what the onsite-metro case needs — so a budget, not zero. — `sources/ats/workday.py`
+**Workday and iCIMS cost a request per description, and hold a reserved share of the
+budget.** Capped rather than unlimited: without descriptions the workplace and requirement
+gates cannot reach a verdict, which is exactly what the onsite-metro case needs — so a
+budget, not zero. The budget is a request allowance, and one of these boards costs
+several list pages plus up to twenty detail requests where a Greenhouse board costs one,
+so a split by board count alone gave Workday 47 of 400 requests and read about one board
+per run on the only free source for onsite, non-tech US employers. `allocate` now
+reserves `RESERVED_SHARE` (40%) for the platforms whose adapter is flagged `costly`,
+divided between them by board count, each taking the larger of its reserved and its
+proportional share; the cheap platforms split the rest, and the parts still sum to the
+budget. The detail requests go to title-matched postings first
+(`prioritize_for_details`, a word-bounded phrase match), because spending them in
+listing order gave an unrelated job the description the gates read while the title match
+below it went without one — live, that put a software role into an accounting search as
+a flag. The flags (`costly`, `server_search`) live on the adapter, not in the planner, so
+a further platform of either kind needs no planner change. One gap is unchanged:
+`targets_for(limit=...)` still selects `limit` boards for what is a request allowance,
+so a costly platform's coverage note may say "N more not reached" when the requests, not
+the boards, ran out. — `engine/planning.py`, `sources/ats/base.py`,
+`sources/ats/workday.py`, `sources/ats/icims.py`
 
 **Inflection is stemmed on the final word only.** Excluding "auditing" also catches
 "audit"; words under five characters are left alone so "plus" does not start matching
@@ -222,14 +258,22 @@ The measured facts that shaped it: a run touches ~20k jobs and writes ~20k verdi
 HTTP, and page-based replica sync would cost ~150–200 MB per run against a 3 GB monthly
 quota. So the runner keeps nothing between runs: it pulls the searches and the registry
 into a scratch SQLite file, runs the unchanged engine, and publishes each run in batches
-of a few hundred statements.
+of a few hundred statements. The registry pull grew from ~1.8k to ~29k rows per run with
+the three-list seed; that is still far inside the free tier's row-read quota, and the
+seed itself ships gzip-compressed (about 530 KB) so the runner's checkout does not carry
+ten megabytes of JSON per refresh.
 
 Seven invariants, each enforced in code and pinned by a test:
 
 1. **One writer per table.** The API writes `searches`, `user_job_status`,
    `job_feedback`, `company_registry` inserts and the request queue; the runner writes
    `runs`, `run_sources`, `jobs`, `job_sources`, `job_search_matches`, registry health,
-   the lease and the guard. — `infra/publish.py`
+   the lease and the guard. The runner's one registry insert is the seed top-up: after
+   `pull` it inserts the seed rows the cloud lacks (`ensure_registry(cloud, known)`,
+   `INSERT OR IGNORE`, compared case-insensitively on `(ats, token)` because an older
+   registry holds Workday tokens in the site's own case where the seed carries them
+   lowercased), and the same rows into its scratch copy so the run fans out over them.
+   The API owns every other insert. — `infra/publish.py`, `engine/cloud_run.py`
 2. **Exactly one publisher, and takeover invalidates the previous owner atomically.**
    `publish_lease` is a single row; taking it overwrites the token in the same
    transaction that closes the old owner's request. From then on the old runner's
@@ -245,8 +289,10 @@ Seven invariants, each enforced in code and pinned by a test:
    written. (On a shared SQLite file the heartbeat's own connection can starve behind
    the publisher's back-to-back batches — the first real run through the website lost
    its lease that way.) Short API-side groups (a dismissal: rule, status and reason)
-   are baton-based interactive transactions. — `infra/turso.py`, `Store._tx`,
-   `Store.guard_statements`
+   are baton-based interactive transactions. The one runner batch without the guard is
+   the seed top-up in invariant 1: atomic, but not lease-proven, because it writes
+   unchanged, idempotent bundled data that any runner may insert and a lost lease cannot
+   make wrong. — `infra/turso.py`, `Store._tx`, `Store.guard_statements`
 4. **At most one queued request, by constraint.** A partial unique index on
    `run_requests(status) WHERE status = 'queued'` makes "create or attach" atomic under
    concurrent clicks. The workflow carries no inputs: every run consumes whatever is
@@ -278,7 +324,12 @@ a background thread with the real fetcher, when the app runs on a local SQLite d
 — the website and the command line are then one system; GitHub Actions when deployed,
 because a Vercel function cannot host a minutes-long fan-out; nobody, until the schedule,
 when the cloud database is configured without GitHub credentials. The runner path is the
-same in every case, and it seeds the registry from the bundled file when it is empty.
+same in every case, and it tops the registry up with whatever seed rows it lacks, so a
+registry behind the bundled seed is never a market quietly smaller than the product's
+reach. `jobagent cloud init` does the same top-up, after migrating, and is the step to
+run before deploying a runner built from a version that adds a column: the runner does
+not migrate the cloud itself, and against an un-migrated database it fails at `pull`
+rather than running degraded.
 
 ### The search screen
 

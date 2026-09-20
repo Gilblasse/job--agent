@@ -28,7 +28,7 @@ in its registry.
 | Remote roles at tech and scale-up companies | **Good.** These employers live on Greenhouse, Lever and Ashby. |
 | Non-tech roles at those same employers (finance, HR, support, ops) | **Decent.** Their ATS boards carry every department, not just engineering. |
 | US federal roles, any occupation, any metro | **Good** via USAJOBS — but federal only. No state, city or private employers. |
-| Onsite or hybrid roles in a specific metro | **Thin.** Only what USAJOBS covers federally, plus whatever the registered Workday/Greenhouse/Lever/Ashby/Workable employers happen to advertise there. |
+| Onsite or hybrid roles in a specific metro | **Uneven.** Thousands of Workday and iCIMS employers are now registered — the platforms where large non-tech US employers post onsite roles — plus the Greenhouse/Lever/Ashby/Workable boards and whatever USAJOBS covers federally. What a metro search returns still depends on who among them is hiring there this week, and a run reads a share of the registry, not all of it. |
 | Small local employers, agencies, hourly and shift work | **Poor.** These employers mostly do not run a public ATS board. |
 
 `examples/pm-dfw-hybrid.yml` is shipped precisely because it is the hardest case. Expect
@@ -38,10 +38,17 @@ few results. That is a fact about free job data, not a defect in the filter.
 own documentation — so discovery is fan-out over known employer boards. If a company is
 not in the registry, its jobs are not found.
 
-It ships seeded with 1,766 boards, of which **1,479 are searchable today**. The other 287
-sit on SmartRecruiters, whose API host answers `robots.txt` with `Disallow: /` for every
-agent — and an explicit `Allow` for one named bot, which makes the refusal deliberate — so
-they are seeded but never read. `jobagent company list` shows the split, and
+It ships seeded with 28,562 boards, **all of them searchable**: every seeded board sits on
+one of the six platforms with a shipped adapter (Workable 8,522, Greenhouse 7,310, Ashby
+3,856, Workday 3,572, Lever 2,764, iCIMS 2,538). 693 carry a US flag from the source lists
+— only one of the three lists records a country — and the rest learn their US share as
+they are read: each board's share of US-located postings is recorded on the first read and
+orders the fan-out from then on, so measured-US boards come first, untried boards next and
+measured non-US boards last. SmartRecruiters is no longer seeded. Its API host answers
+`robots.txt` with `Disallow: /` for every agent — and an explicit `Allow` for one named
+bot, which makes the refusal deliberate — so its boards were seeded but never read, and
+its identifiers are case-sensitive where every other platform's fold to one spelling. It
+stays listed under `jobagent sources list` as excluded, with that reason.
 `jobagent sources doctor` counts only what a working adapter can actually read.
 
 ### Growing the registry
@@ -53,6 +60,22 @@ jobagent company add https://boards.greenhouse.io/acme     # one board, from its
 jobagent company add https://acme.com/careers              # or from a careers page
 jobagent company import companies.csv                      # many at once
 ```
+
+The bundled seed is a merge of three open lists, keyed by platform and board token:
+[outscal/OpenJobs](https://github.com/outscal/OpenJobs) (MIT; the only one with a
+website and a country per company, hence the only source of the US flag),
+[kalil0321/ats-scrapers](https://github.com/kalil0321/ats-scrapers) (MIT; name, slug and
+board URL per platform) and [elliottdehn/open-jobs](https://github.com/elliottdehn/open-jobs)
+(CC0; bare slugs). It ships gzip-compressed (`companies.seed.json.gz`, about 530 KB,
+written with a fixed timestamp so a rebuild that changes nothing is not a diff), because
+28,000 rows of indented JSON would add roughly 10 MB of repository history per refresh.
+`python scripts/build_seed.py` rebuilds it from the lists; `--offline DIR` reads the same
+files from a directory when the network is not available. A Workday row is accepted only
+from a URL that carries its site, because a (tenant, instance, site) triple with a
+defaulted site is a plausible board that fetches nothing; Workday tokens are stored
+lowercased, which Workday accepts, and `jobagent company seed` on a registry from an
+older version treats an existing mixed-case token as the same board rather than
+registering it twice.
 
 **`company discover` is built but held.** On its first live run, both Common Crawl hosts
 answered `robots.txt` with `Disallow: /`. That is almost certainly aimed at web spiders
@@ -266,7 +289,10 @@ All network traffic goes through one chokepoint, so these are properties of the 
 rather than promises:
 
 - **robots.txt is respected** (RFC 9309: a 4xx means no file is published and access is
-  allowed; a 5xx is treated as a full disallow).
+  allowed; a 5xx is treated as a full disallow), **including its `Crawl-delay`**: a host
+  that asks for a pause gets it, up to 30 seconds, and the pause only ever widens the
+  per-host pace. `api.lever.co` asks for one second, so a Lever fan-out runs at one
+  request a second.
 - **Rate limiting is per host**, because several ATS platforms put thousands of employers
   behind one hostname.
 - **403 stops that host for the run.** A 429 earns one wait when `Retry-After` asks for a
@@ -285,7 +311,7 @@ rather than promises:
 
 ## Verification status
 
-604 tests, all offline, run with `pytest`.
+774 tests, all offline, run with `pytest`.
 
 **Live-verified on 2026-09-14** from an ordinary home network, after being built in an
 environment that refused every job-source host:
@@ -327,19 +353,49 @@ multi-location postings had the same problem. And the `robots.txt` read was bein
 charged against each source's board allowance, so the last planned board on every
 platform was never reached, and every coverage table said so.
 
-One thing to know about budgets: `source_budget` in a spec is split across platforms in
-proportion to how many boards each has registered. Adding Workable's 172 boards to the
-registry did not add reach to a 400-request run; it re-sliced it. The same script run
-the same morning at the previous commit read 17,715 / 20,119 / 20,407 postings for the
-three searches; with Workable in the split it read 16,751 / 19,567 / 20,162, for the same
-9 / 35 / 4 matches. Raise the budget if you want both.
+One thing to know about budgets: `source_budget` in a spec is a request allowance, and
+platforms differ by an order of magnitude in what one board costs. A Greenhouse, Lever,
+Ashby or Workable board is one request; a Workday or iCIMS board is several list pages
+plus one request per description. Under the original split — by board count alone —
+adding Workable's 172 boards to the registry did not add reach to a 400-request run, it
+re-sliced it (the same script at the previous commit read 17,715 / 20,119 / 20,407
+postings for the three searches; with Workable in the split it read 16,751 / 19,567 /
+20,162, for the same 9 / 35 / 4 matches), and Workday drew 47 requests, about one board
+per run. So 40% of the budget is now reserved for the costly platforms, divided between
+them by board count, each taking the larger of its reserved and its proportional share;
+the cheap platforms split the rest. The default is now 1,500 requests. Platforms are read
+in parallel at the per-host pace — a quarter of a second, or one second on Lever by its
+robots `Crawl-delay` — so the slowest platform's share sets the time, not the sum, and a
+run takes several minutes rather than the roughly three of the 400-request runs above.
+Growing the registry no longer only re-slices a fixed pie between platforms, but within a
+platform it still does: more boards than a run can reach means each run reads a slice,
+ordered by measured US share and then least-recently-tried first, so successive runs walk
+the registry rather than re-reading the same few hundred boards.
 
-Not yet run live: USAJOBS (needs a free key) — and the live robots test found on
-2026-09-15 that `data.usajobs.gov` publishes `Disallow: /`, so even with a key the tool
-will currently refuse it, exactly as it refuses SmartRecruiters and Common Crawl. Whether
-a keyed, documented API is what that file means is a question for USAJOBS; until then
-the "Good" federal coverage in the table above is unverified. `company discover` ran and
-was refused by Common Crawl's `robots.txt`; see above.
+Not yet run live: USAJOBS (needs a free key) — and `data.usajobs.gov` publishes
+`Disallow: /`, read on 2026-09-15 and again on 2026-09-20, so even with a key the tool
+will currently refuse it, exactly as it refuses SmartRecruiters and Common Crawl. The live
+robots test now records that hold rather than failing on it: every shipped host must
+still permit this crawler, and the held host must still deny it, so a change in either
+direction is noticed and acted on deliberately. Whether a keyed, documented API is what
+that file means is a question for USAJOBS; until then the "Good" federal coverage in the
+table above is unverified. `company discover` ran and was refused by Common Crawl's
+`robots.txt`; see above.
+
+**Third live pass, 2026-09-20**, the data-sourcing changes: iCIMS added as a sixth
+adapter after its tenant `robots.txt` files were read (`careers-48forty`, `external-92y`,
+`resume-chesterton`: only the referral, login, candidate and connect paths are
+disallowed); the live probe reached `careers-48forty` and parsed 150 postings from three
+list requests. The robots sweep from this network answered ALLOW for the Greenhouse API
+(`Disallow: /embed/` only), the Lever API, the Ashby API (a 401 on `robots.txt`, which
+under RFC 9309 means no file is published), Workable and iCIMS, and DENY for
+`data.usajobs.gov`. The same pass found that Ashby pay had been read from a key the live
+API never sends, so it was empty on every Ashby board; that Lever's headed `lists`
+sections were not part of the posting text, so a credential demanded in a Requirements
+bullet never reached the requirement gate; that a heading written with a curly apostrophe
+("What You’ll Do") never matched the section taxonomy; and that a `<li><p>` bullet lost
+its marker to a line break, so a short capitalised bullet read as a heading. All four are
+fixed and pinned in the fixtures.
 
 `pytest -m live` holds tests that hit real endpoints. They are excluded by default so CI
 never depends on third-party uptime.
@@ -399,6 +455,12 @@ Two facts about GitHub: it disables a schedule after 60 days without repository
 activity, and Actions runners use shared IP ranges — the doctor gate inside
 `cloud run` says whether the boards can be read from there, every run.
 
+Upgrading an existing deployment: run `jobagent cloud init` again before deploying a
+runner built from this version. It applies the schema migrations (this version adds the
+registry's `us_share` column) and tops the cloud registry up from the bundled seed, and
+it is safe to repeat. A runner against an un-migrated cloud database fails at `pull`,
+where it copies the registry and finds the column missing, rather than running degraded.
+
 Locally, with no cloud at all: `cd web && npm ci && npm run build && cd ..`, then
 
 ```bash
@@ -421,8 +483,11 @@ behind a password you set; nothing else sees them.
 
 ## Attribution
 
-The bundled registry is derived from [outscal/OpenJobs](https://github.com/outscal/OpenJobs)
-(MIT), filtered to platforms this tool can read.
+The bundled registry is merged from three open lists, filtered to platforms this tool can
+read: [outscal/OpenJobs](https://github.com/outscal/OpenJobs) (MIT, itself a fork of
+santifer/career-ops), [kalil0321/ats-scrapers](https://github.com/kalil0321/ats-scrapers)
+(MIT) and [elliottdehn/open-jobs](https://github.com/elliottdehn/open-jobs) (CC0).
+`scripts/build_seed.py` records which file came from which list, under which licence.
 
 ## License
 

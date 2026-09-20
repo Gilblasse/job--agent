@@ -51,10 +51,15 @@ reach, and the request budget is the search strategy. Before changing discovery,
 ## Before trusting any result
 
 Run `jobagent sources doctor` first and read it; an empty result set is only an empty
-market if the gate passed. The four P1 adapters were live-verified on 2026-09-14 and the
-first live run found four defects no fixture had exercised (`tests/unit/test_live_findings.py`).
-When a live run surfaces a wrong match or a wrong rejection, add the real input to that
-file before fixing it — live data is where the remaining bugs are.
+market if the gate passed. Six ATS adapters are live-verified: Greenhouse, Lever, Ashby and
+Workday on 2026-09-14, Workable on 2026-09-15, iCIMS on 2026-09-20. The first live run
+found four defects no fixture had exercised (`tests/unit/test_live_findings.py`), and the
+2026-09-20 pass found four more in adapters that had passed their fixtures (Ashby pay,
+Lever list sections, curly-apostrophe headings, `<li><p>` bullets). When a live run
+surfaces a wrong match or a wrong rejection, add the real input to that file before fixing
+it — live data is where the remaining bugs are. USAJOBS is held by its robots posture
+(`data.usajobs.gov` publishes `Disallow: /`); the live robots test records the hold and
+fails if it lifts, so that the hold is released deliberately rather than bypassed.
 
 ## Relevance and exclusions read the work, not the whole posting
 
