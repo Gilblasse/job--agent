@@ -27,13 +27,9 @@ from datetime import date
 from ...domain.models import RawPosting, WorkplaceType
 from ...domain.normalize import parse_relative_date
 from ...ports import Fetcher, FetchError
-from .base import AtsAdapter, BoardTarget, ats_authority, require_ok
+from .base import TERM_SEPARATOR, AtsAdapter, BoardTarget, ats_authority, require_ok
 
 PAGE_SIZE = 20  # hard platform limit; larger values silently return nothing
-
-# Search terms reach the adapter joined by a unit separator, a control character no
-# legitimate job title contains.
-TERM_SEPARATOR = "\x1f"
 
 WORKPLACE = {
     "remote": WorkplaceType.REMOTE,
@@ -49,6 +45,8 @@ WORKPLACE = {
 class WorkdayAdapter(AtsAdapter):
     name: str = "workday"
     probe_tokens: tuple[str, ...] = ()
+    costly: bool = True
+    server_search: bool = True
     max_pages: int = 3
     max_details: int = 20
     max_terms: int = 4

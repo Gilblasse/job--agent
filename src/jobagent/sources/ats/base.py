@@ -16,6 +16,10 @@ from ...domain.models import AuthorityTier, RawPosting, SourceReport, SourceStat
 from ...ports import DiscoveryRequest, DiscoveryResult, Fetcher, FetchError
 from ..base import SourceAdapter, dedupe_postings
 
+# Search terms reach an adapter joined by a unit separator, a control character no
+# legitimate job title contains.
+TERM_SEPARATOR = "\x1f"
+
 
 @dataclass
 class BoardTarget:
@@ -45,6 +49,10 @@ class AtsAdapter(SourceAdapter):
 
     name: str = "ats"
     probe_tokens: tuple[str, ...] = ()
+    # A board costs many requests: list pages plus one per description.
+    costly: bool = False
+    # The platform accepts the search terms, so they are pushed down to it.
+    server_search: bool = False
 
     # -- subclass hooks -----------------------------------------------------------
 
