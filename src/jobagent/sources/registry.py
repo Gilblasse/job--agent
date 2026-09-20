@@ -9,6 +9,7 @@ not spent re-probing boards that are gone.
 from __future__ import annotations
 
 import csv
+import gzip
 import json
 from dataclasses import dataclass
 from datetime import datetime
@@ -21,7 +22,7 @@ from ..sources.ats.base import BoardTarget
 from .discovery import extract_board, split_token
 
 SEED_PACKAGE = "jobagent.data"
-SEED_FILENAME = "companies.seed.json"
+SEED_FILENAME = "companies.seed.json.gz"
 
 
 @dataclass
@@ -39,13 +40,13 @@ class SeedReport:
 def load_seed_file() -> dict[str, Any]:
     """Read the bundled seed, wherever the package is installed."""
     try:
-        text = resources.files(SEED_PACKAGE).joinpath(SEED_FILENAME).read_text(encoding="utf-8")
+        data = resources.files(SEED_PACKAGE).joinpath(SEED_FILENAME).read_bytes()
     except (FileNotFoundError, ModuleNotFoundError):
         local = Path(__file__).resolve().parents[1] / "data" / SEED_FILENAME
         if not local.exists():
             return {"companies": []}
-        text = local.read_text(encoding="utf-8")
-    return json.loads(text)
+        data = local.read_bytes()
+    return json.loads(gzip.decompress(data))
 
 
 def seed_registry(store: Store, *, only_us: bool = False) -> SeedReport:
