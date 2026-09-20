@@ -80,6 +80,10 @@ _WORKDAY = re.compile(
     r"^(?P<tenant>[\w-]+)\.wd(?P<wd>\d+)\.myworkdayjobs\.com$", re.IGNORECASE
 )
 
+# Subdomains a vendor keeps for itself on a tenant-per-subdomain platform. iCIMS serves
+# its marketing site, media and community from these; none of them is an employer.
+VENDOR_LABELS = frozenset({"www", "media", "login", "community", "developer-community"})
+
 
 def extract_board(url: str) -> BoardRef | None:
     """Identify the ATS board a URL points at, if any."""
@@ -148,11 +152,14 @@ def extract_board(url: str) -> BoardRef | None:
         ("breezy.hr", "breezy"),
         ("applytojob.com", "jazzhr"),
         ("teamtailor.com", "teamtailor"),
+        ("icims.com", "icims"),
     ):
         # A tenant subdomain specifically, so "evilbamboohr.com" does not qualify.
         if host.endswith(f".{domain}"):
             token = host[: -len(domain) - 1]
-            return BoardRef(platform, token, url) if token and "." not in token else None
+            if token and "." not in token and token not in VENDOR_LABELS:
+                return BoardRef(platform, token, url)
+            return None
 
     if host.endswith((".jobs.personio.de", ".jobs.personio.com")):
         return BoardRef("personio", host.split(".")[0], url)
@@ -169,7 +176,7 @@ _EMBED = re.compile(
 _BARE = re.compile(
     r"""https?://[\w.-]*(?:greenhouse\.io|lever\.co|ashbyhq\.com|myworkdayjobs\.com"""
     r"""|smartrecruiters\.com|workable\.com|recruitee\.com|bamboohr\.com|breezy\.hr"""
-    r"""|applytojob\.com|teamtailor\.com)[^\s"'<>]*""",
+    r"""|applytojob\.com|teamtailor\.com|icims\.com)[^\s"'<>]*""",
     re.IGNORECASE,
 )
 # Greenhouse embeds identify the tenant in a query parameter rather than the path.

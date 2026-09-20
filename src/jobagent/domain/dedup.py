@@ -33,6 +33,7 @@ ATS_HOSTS = (
     "greenhouse.io", "lever.co", "ashbyhq.com", "myworkdayjobs.com", "smartrecruiters.com",
     "workable.com", "recruitee.com", "bamboohr.com", "breezy.hr", "applytojob.com",
     "teamtailor.com", "personio.de", "rippling.com", "usajobs.gov", "jobs.polymer.co",
+    "icims.com",
 )
 
 

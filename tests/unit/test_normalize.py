@@ -83,6 +83,19 @@ class TestLocation:
         assert (location.city, location.region, location.country) == ("Dallas", "TX", "US")
         assert "New York" in location.raw
 
+    def test_prefixed_country_state_city_parses(self):
+        """iCIMS writes "US-FL-Bartow"; with no comma and no spelled-out state the whole
+        string became the city, which broke location identity and display."""
+        location = parse_location("US-FL-Bartow", "US")
+        assert (location.city, location.region, location.country) == ("Bartow", "FL", "US")
+        location = parse_location("US-TX-Dallas", None)
+        assert (location.city, location.region, location.country) == ("Dallas", "TX", "US")
+        location = parse_location("Dallas, TX", "US")
+        assert (location.city, location.region, location.country) == ("Dallas", "TX", "US")
+        # A non-US prefix is left to the existing rules, which is what it produced before.
+        location = parse_location("CA-ON-Toronto", None)
+        assert (location.city, location.region, location.country) == ("CA-ON-Toronto", None, "CA")
+
 
 class TestWorkplace:
     def test_source_field_beats_text_inference(self, taxonomy):

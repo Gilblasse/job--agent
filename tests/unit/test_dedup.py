@@ -55,6 +55,17 @@ class TestAuthority:
         assert url_authority("https://jobs.lever.co/acme/1") > \
                url_authority("https://some-aggregator.example/jobs/1")
 
+    def test_icims_urls_rank_as_official_ats(self):
+        """``icims.com`` was missing from ATS_HOSTS, so an iCIMS record lost every tie."""
+        assert (
+            url_authority("https://careers-acme.icims.com/jobs/5819/slug/job", "acme.com")
+            is AuthorityTier.OFFICIAL_ATS
+        )
+        assert (
+            url_authority("https://some-aggregator.example/jobs/1", "acme.com")
+            is AuthorityTier.UNVERIFIED
+        )
+
 
 class TestClustering:
     def test_postings_sharing_a_url_merge_even_with_different_titles(self):

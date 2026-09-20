@@ -143,6 +143,15 @@ def parse_location(raw: str, country_hint: str | None = None) -> Location:
     # city. ``raw`` keeps every place, which is what the location gate reads.
     primary = raw.split(";")[0].strip()
 
+    # iCIMS writes a place as "US-FL-Bartow": country, state and city hyphenated. There is
+    # no comma for the city/state rule and no spelled-out name for the state loop, so the
+    # whole string fell through as the city.
+    prefixed = re.fullmatch(r"([A-Z]{2})-([A-Z]{2})-(.+)", primary)
+    if prefixed and prefixed.group(1) == "US" and prefixed.group(2) in _STATE_ABBREVS:
+        return Location(
+            raw=raw, city=prefixed.group(3).strip(), region=prefixed.group(2), country="US"
+        )
+
     city = region = None
     match = _CITY_STATE.search(primary)
     if match and match.group(2) in _STATE_ABBREVS:
