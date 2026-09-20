@@ -201,5 +201,6 @@ def _record_board_health(store: Store, report: SourceReport) -> None:
         if registry_id is None:
             continue
         store.record_board_outcome(
-            registry_id, ok=entry.ok, kind=getattr(entry, "failure_kind", "")
+            registry_id, ok=entry.ok, kind=getattr(entry, "failure_kind", ""),
+            us_share=getattr(entry, "us_share", None),
         )

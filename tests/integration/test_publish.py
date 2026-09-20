@@ -17,9 +17,11 @@ import pytest
 from jobagent.domain.spec import SearchSpec
 from jobagent.engine.cloud_run import run_cloud
 from jobagent.engine.orchestrator import run_search
-from jobagent.infra.publish import publish_run, pull
+from jobagent.infra.publish import PublishReport, finish_publish, publish_run, pull
 from jobagent.infra.store import LEASE_SECONDS, LeaseLost, Store
 from jobagent.infra.turso import TursoConnection, TursoError
+from jobagent.sources import registry as registry_module
+from jobagent.sources.registry import ensure_registry, seed_registry
 from tests.fakes import FakeFetcher, FakeHrana
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
@@ -115,6 +117,18 @@ def verdicts(store: Store, search_id: int, run_id: int) -> set[tuple]:
     }
 
 
+def statements(fake: FakeHrana, since: int = 0) -> list[str]:
+    """Every SQL statement the fake server received, from request ``since`` on."""
+    sqls: list[str] = []
+    for body in fake.requests[since:]:
+        for item in body.get("requests", []):
+            if item.get("type") == "execute":
+                sqls.append(item["stmt"]["sql"])
+            elif item.get("type") == "batch":
+                sqls.extend(step["stmt"]["sql"] for step in item["batch"]["steps"])
+    return sqls
+
+
 class TestPullAndPublish:
     def test_pull_copies_searches_with_identity_and_the_registry(self, cloud):
         local = Store(":memory:")
@@ -179,6 +193,59 @@ class TestPullAndPublish:
 
         after = cloud.results(search["id"], run_id=published.cloud_run_id, limit=1)[0]
         assert after["title"] == before["title"] and after["changed_since"] == 1
+
+
+class TestRegistryRidesAlong:
+    def test_pull_and_health_publish_carry_us_share(self, cloud):
+        """The measured US share orders the fan-out, so the scratch copy must receive
+        what the cloud knows and the cloud must receive what the run measured."""
+        cloud.conn.execute("UPDATE company_registry SET us_share = 0.8 WHERE token = 'acme'")
+        local = Store(":memory:")
+        pull(cloud, local)
+        row = local.registry_targets(platforms=["greenhouse"], limit=1)[0]
+        assert row["us_share"] == 0.8
+
+        local.record_board_outcome(int(row["id"]), ok=True, us_share=0.3)
+        lease = leased(cloud, T0)
+        finish_publish(local, cloud, lease, T0 + timedelta(minutes=1), T0, PublishReport())
+        published = cloud.conn.execute(
+            "SELECT us_share FROM company_registry WHERE token = 'acme'"
+        ).fetchone()
+        assert published["us_share"] == 0.3
+
+    def test_ensure_registry_inserts_only_missing_seed_rows(self, cloud, fake, monkeypatch):
+        """A top-up inserts what the registry lacks and nothing else: an exact seed row, a
+        user-added row with a seed key and a Workday row an older registry spelled in the
+        site's own case all count as present, and a complete registry issues no write."""
+        seed = [
+            {"company": "Acme Corp", "ats": "greenhouse", "token": "acme"},
+            {"company": "Seed Co", "ats": "greenhouse", "token": "seedco"},
+            {
+                "company": "Aptiv", "ats": "workday", "token": "aptiv:5:aptiv_careers",
+                "extra": {"wd": "5", "site": "aptiv_careers"},
+            },
+            {"company": "Newco", "ats": "workday", "token": "newco:1:external", "us_signal": True},
+            {"company": "Fresh", "ats": "ashby", "token": "fresh"},
+        ]
+        monkeypatch.setattr(registry_module, "load_seed_file", lambda: {"companies": seed})
+        cloud.add_company("Seed Co", "greenhouse", "seedco", source="seed")
+        cloud.add_company("Aptiv", "workday", "aptiv:5:APTIV_CAREERS", source="seed")
+        before = cloud.known_board_keys()
+
+        assert ensure_registry(cloud, cloud.known_board_keys()) == 2
+        assert cloud.known_board_keys() - before == {
+            ("workday", "newco:1:external"), ("ashby", "fresh"),
+        }
+
+        mark = len(fake.requests)
+        assert ensure_registry(cloud, cloud.known_board_keys()) == 0
+        assert not [sql for sql in statements(fake, mark) if "INSERT" in sql.upper()]
+
+        local = Store(":memory:")
+        local.add_company("Aptiv", "workday", "aptiv:5:APTIV_CAREERS")
+        report = seed_registry(local)
+        assert (report.added, report.existing) == (4, 1)
+        assert ("workday", "aptiv:5:aptiv_careers") not in local.known_board_keys()
 
 
 class TestFailureHalfway:

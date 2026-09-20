@@ -235,7 +235,14 @@ class Store:
                 "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
                 (version, datetime.now().isoformat()),
             ))
-            self._batch(stmts)
+            try:
+                self._batch(stmts)
+            except (sqlite3.OperationalError, TursoError) as error:
+                # ALTER TABLE ... ADD COLUMN has no IF NOT EXISTS. When two connections
+                # reach the same migration together the second one's batch rolls back
+                # on "duplicate column"; the first has already recorded the version.
+                if "duplicate column" not in str(error):
+                    raise
 
     def close(self) -> None:
         self.conn.close()
@@ -1097,13 +1104,14 @@ class Store:
             (
                 """INSERT OR IGNORE INTO company_registry
                    (company, domain, ats, token, board_url, source, us_signal, first_seen,
-                    last_verified, last_success, consecutive_failures, last_failure_kind, notes)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    last_verified, last_success, consecutive_failures, last_failure_kind, notes,
+                    us_share)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     row["company"], row["domain"], row["ats"], row["token"], row["board_url"],
                     row["source"], row["us_signal"], row["first_seen"], row["last_verified"],
                     row["last_success"], row["consecutive_failures"], row["last_failure_kind"],
-                    row["notes"],
+                    row["notes"], row["us_share"],
                 ),
             )
             for row in rows
@@ -1117,7 +1125,7 @@ class Store:
         return list(
             self.conn.execute(
                 """SELECT ats, token, consecutive_failures, last_success, last_verified,
-                          last_failure_kind
+                          last_failure_kind, us_share
                    FROM company_registry WHERE last_verified >= ?""",
                 (since.isoformat(),),
             )
@@ -1132,11 +1140,11 @@ class Store:
                 stmts.append((
                     """UPDATE company_registry
                        SET consecutive_failures=?, last_success=?, last_verified=?,
-                           last_failure_kind=?
+                           last_failure_kind=?, us_share=COALESCE(?, us_share)
                        WHERE ats=? AND token=?""",
                     (
                         row["consecutive_failures"], row["last_success"], row["last_verified"],
-                        row["last_failure_kind"], row["ats"], row["token"],
+                        row["last_failure_kind"], row["us_share"], row["ats"], row["token"],
                     ),
                 ))
             written += self._batch(stmts)
@@ -1148,8 +1156,14 @@ class Store:
     ) -> list[Any]:
         """Pick which boards to fan out to this run.
 
-        Ordering is the rate budget in disguise. US-signalled boards go first because the
-        product is US-scoped, then boards that succeeded recently, then everything else.
+        Ordering is the rate budget in disguise. Boards measured to hire in the US go
+        first, because the product is US-scoped; boards never read yet come next, with
+        the seed's ``us_signal`` as a prior (0.75 flagged, 0.5 not) so an untried flagged
+        board still outranks an untried unflagged one but never a measured US board;
+        boards measured to hire nowhere in the US go last, whatever their flag said.
+        Ties break on least recently tried first (untried before tried), not on most
+        recent success: with 28k boards and a budget of a few hundred, the old
+        tiebreak re-read the same boards every run and never reached the rest.
         Boards that have failed repeatedly sink, and past ``max_failures`` drop out
         entirely so a run is not spent re-probing dead tenants.
         """
@@ -1159,9 +1173,12 @@ class Store:
             clauses.append(f"ats IN ({_placeholders(len(platforms))})")
             params.extend(platforms)
 
-        order = "consecutive_failures ASC, last_success DESC NULLS LAST, company ASC"
+        order = "consecutive_failures ASC, last_verified ASC NULLS FIRST, company ASC"
         if prefer_us:
-            order = "us_signal DESC, " + order
+            order = (
+                "COALESCE(us_share, CASE us_signal WHEN 1 THEN 0.75 ELSE 0.5 END) DESC, "
+                + order
+            )
 
         return list(
             self.conn.execute(
@@ -1178,19 +1195,25 @@ class Store:
         )
         return {row["ats"]: int(row["n"]) for row in rows}
 
-    def record_board_outcome(self, registry_id: int, *, ok: bool, kind: str = "") -> None:
+    def record_board_outcome(
+        self, registry_id: int, *, ok: bool, kind: str = "", us_share: float | None = None
+    ) -> None:
         """Update a board's health after a fan-out attempt.
 
         ``kind`` is kept because "rate limited" and "tenant is gone" must not be
         conflated: treating a 429 as a dead board is how a registry quietly rots away.
+        ``us_share`` is written only on a successful read, and only when measured: a
+        failed read teaches nothing about where a board hires, and neither does a
+        board whose postings named no country.
         """
         now = datetime.now().isoformat()
         with self._tx():
             if ok:
                 self.conn.execute(
                     """UPDATE company_registry SET consecutive_failures=0, last_success=?,
-                           last_verified=?, last_failure_kind='' WHERE id=?""",
-                    (now, now, registry_id),
+                           last_verified=?, last_failure_kind='',
+                           us_share=COALESCE(?, us_share) WHERE id=?""",
+                    (now, now, us_share, registry_id),
                 )
             elif kind in NOT_THE_BOARDS_FAULT:
                 # Recorded, but never counted against the board. None of these are

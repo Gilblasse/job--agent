@@ -109,11 +109,16 @@ def run_cloud(
         with tempfile.TemporaryDirectory() as scratch_dir, contextlib.ExitStack() as stack:
             local = Store(Path(scratch_dir) / "scratch.sqlite3")
             stack.callback(local.close)
-            seeded = ensure_registry(cloud)
-            if seeded:
-                log(f"registry was empty; seeded {seeded} boards")
             pulled = pull(cloud, local)
             log(f"pulled {pulled.searches} searches and {pulled.boards} boards")
+            # The runner's one registry insert (the API owns the rest): seed boards
+            # the cloud lacks, and the same rows into the scratch copy so this run
+            # already fans out over them.
+            known = local.known_board_keys()
+            seeded = ensure_registry(cloud, known)
+            if seeded:
+                ensure_registry(local, known)
+                log(f"registry lacked {seeded} seed boards; added them")
 
             fetcher = open_fetcher()
             if hasattr(fetcher, "__enter__"):

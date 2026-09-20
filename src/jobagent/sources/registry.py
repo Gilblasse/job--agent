@@ -58,9 +58,22 @@ def seed_registry(store: Store, *, only_us: bool = False) -> SeedReport:
     data = load_seed_file()
     companies = data.get("companies") or []
     report = SeedReport()
+    known = store.known_board_keys()
+    folded = {(ats, token.lower()) for ats, token in known}
 
     for row in companies:
         if only_us and not row.get("us_signal"):
+            continue
+        key = (row["ats"], row["token"])
+        if key not in known and (key[0], key[1].lower()) in folded:
+            # A case variant of this board is already registered: older registries
+            # hold Workday tokens in the site's own case where the seed now carries
+            # them lowercased, and adding the seed's spelling would register the same
+            # board twice. An exact match still goes through add_company so the
+            # seed's refreshed routing metadata lands on it.
+            report.existing += 1
+            report.total += 1
+            report.by_platform[row["ats"]] = report.by_platform.get(row["ats"], 0) + 1
             continue
         added = store.add_company(
             company=row["company"],
@@ -80,15 +93,20 @@ def seed_registry(store: Store, *, only_us: bool = False) -> SeedReport:
     return report
 
 
-def ensure_registry(store: Store) -> int:
-    """Seed the registry from the bundled file when it is empty; returns boards added.
+def ensure_registry(store: Store, known: set[tuple[str, str]] | None = None) -> int:
+    """Insert the seed boards the registry lacks; returns how many were added.
 
-    Batched rather than row by row, because over HTTP each row would be a round trip.
-    Discovery is fan-out over the registry, so an empty one is an empty market that
-    looks like a search result -- the one thing a run must never quietly do.
+    ``known`` is the registry's (ats, token) set, read from ``store`` when not given,
+    and compared case-insensitively: an older registry holds Workday tokens in the
+    site's own case where the seed now carries them lowercased, and a top-up must not
+    register the same board twice. Batched rather than row by row, because over HTTP
+    each row would be a round trip, and nothing is issued when nothing is missing.
+    Discovery is fan-out over the registry, so a registry behind the seed is a market
+    quietly smaller than the product's reach -- the one thing a run must never do.
     """
-    if store.registry_counts():
-        return 0
+    if known is None:
+        known = store.known_board_keys()
+    folded = {(ats, token.lower()) for ats, token in known}
     now = datetime.now().isoformat()
     rows = [
         {
@@ -96,10 +114,11 @@ def ensure_registry(store: Store) -> int:
             "token": row["token"], "board_url": row.get("board_url", ""), "source": "seed",
             "us_signal": int(bool(row.get("us_signal"))), "first_seen": now,
             "last_verified": None, "last_success": None, "consecutive_failures": 0,
-            "last_failure_kind": "",
+            "last_failure_kind": "", "us_share": None,
             "notes": json.dumps(row.get("extra") or {}) if row.get("extra") else "",
         }
         for row in load_seed_file().get("companies") or []
+        if (row["ats"], row["token"].lower()) not in folded
     ]
     return store.insert_registry_rows(rows)
 

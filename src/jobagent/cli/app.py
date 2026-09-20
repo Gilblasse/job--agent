@@ -886,7 +886,8 @@ def _cloud_store(url: str, token: str) -> Store:
 
 @cloud_app.command("init")
 def cloud_init() -> None:
-    """Create the cloud schema and load the bundled registry. Safe to repeat."""
+    """Create or upgrade the cloud schema and top the registry up from the bundled seed.
+    Safe to repeat; run it before deploying a new version."""
     url, token = open_cloud()
     cloud = _cloud_store(url, token)
     cloud.migrate()

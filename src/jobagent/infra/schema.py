@@ -283,4 +283,16 @@ MIGRATIONS.append(
     )
 )
 
+MIGRATIONS.append(
+    (
+        6,
+        """
+        -- The share of a board's postings located in the US, measured on every read.
+        -- us_signal is a prior about the company; this is evidence about the board, and
+        -- the fan-out order prefers evidence. NULL until the board has been read once.
+        ALTER TABLE company_registry ADD COLUMN us_share REAL;
+        """,
+    )
+)
+
 SCHEMA_VERSION = MIGRATIONS[-1][0]

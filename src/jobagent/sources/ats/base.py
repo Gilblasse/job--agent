@@ -13,6 +13,7 @@ from datetime import date
 from typing import Any
 
 from ...domain.models import AuthorityTier, RawPosting, SourceReport, SourceStatus
+from ...domain.normalize import detect_country
 from ...domain.text import contains_phrase
 from ...ports import DiscoveryRequest, DiscoveryResult, Fetcher, FetchError
 from ..base import SourceAdapter, dedupe_postings
@@ -42,6 +43,9 @@ class BoardOutcome:
     ok: bool
     count: int = 0
     failure_kind: str = ""
+    # Share of the postings located in the US, among those whose country is known;
+    # None when nothing was read or no posting named a country.
+    us_share: float | None = None
 
 
 @dataclass
@@ -172,7 +176,8 @@ class AtsAdapter(SourceAdapter):
         except Exception:  # noqa: BLE001 - a malformed board must not end the run
             return BoardOutcome(target, ok=False, failure_kind="parse_error"), []
         # Empty is not failure: a real board with nothing open right now.
-        return BoardOutcome(target, ok=True, count=len(found)), list(found or [])
+        found = list(found or [])
+        return BoardOutcome(target, ok=True, count=len(found), us_share=_us_share(found)), found
 
     def probe_targets(self) -> list[BoardTarget]:
         """Reference boards used by the go/no-go gate.
@@ -277,6 +282,21 @@ def ats_authority(url: str, domain: str | None = None) -> AuthorityTier:
     from ...domain.dedup import url_authority
 
     return url_authority(url, domain)
+
+
+def _us_share(postings: list[RawPosting]) -> float | None:
+    """The share of a board's postings in the US, among those whose country is known.
+
+    Measured on every read because it beats the registry's imported flag: the seed's
+    us_signal says where a company was listed, while the postings say where it hires.
+    """
+    known = us = 0
+    for posting in postings:
+        code = posting.country_hint or detect_country(posting.location_raw)[0]
+        if code:
+            known += 1
+            us += code == "US"
+    return us / known if known else None
 
 
 def _meter_for(fetcher: Fetcher):

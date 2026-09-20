@@ -12,11 +12,13 @@ from pathlib import Path
 
 import pytest
 
-from jobagent.domain.models import SourceStatus, UserStatus
+from jobagent.domain.models import RawPosting, SourceStatus, UserStatus
 from jobagent.domain.spec import SearchSpec
-from jobagent.engine.orchestrator import run_search
+from jobagent.engine.orchestrator import _record_board_health, run_search
 from jobagent.engine.verify import verify_jobs
 from jobagent.infra.store import Store
+from jobagent.ports import DiscoveryRequest
+from jobagent.sources.ats.base import AtsAdapter, BoardTarget
 from tests.fakes import FakeFetcher, unavailable
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
@@ -393,6 +395,84 @@ class TestRegistryHealthOnlyCountsBoardEvidence:
             store.record_board_outcome(row_id, ok=False, kind="gone")
         store.record_board_outcome(row_id, ok=True)
         assert store.registry_targets(limit=1)[0]["consecutive_failures"] == 0
+
+
+class TestRegistryOrderLearnsFromResults:
+    """Fan-out reads measured-US boards first, untried boards next, measured non-US last.
+
+    The registry grew from 1,766 to 28,562 boards, almost all without a US flag. Ordered
+    by the flag and then by most recent success, the same few hundred boards were re-read
+    every run and the rest never reached. Each read now records the share of a board's
+    postings that are in the US, and that measurement outranks the imported flag.
+    """
+
+    @staticmethod
+    def _set(store: Store, token: str, **columns) -> None:
+        assignments = ", ".join(f"{name} = ?" for name in columns)
+        store.conn.execute(
+            f"UPDATE company_registry SET {assignments} WHERE token = ?",
+            [*columns.values(), token],
+        )
+
+    def test_registry_targets_order_measured_us_untried_then_measured_non_us(self, store):
+        """A flagged board measured at 0.0 sinks below every untried board, and the
+        tiebreak among equals flips from most recent success first to least recently
+        tried first, so a grown registry is walked instead of re-read."""
+        for name in "ABCDE":
+            store.add_company(name, "greenhouse", name.lower(), us_signal=name in "AD")
+        self._set(store, "a", us_share=0.0, last_verified="2026-09-10T00:00:00")
+        self._set(store, "c", us_share=1.0, last_verified="2026-09-12T00:00:00")
+        self._set(
+            store, "e", us_share=1.0, last_verified="2026-09-01T00:00:00",
+            consecutive_failures=5,
+        )
+        order = [row["company"] for row in store.registry_targets(limit=10)]
+        assert order == ["C", "D", "B", "A"]
+
+        store.add_company("F", "greenhouse", "f")
+        self._set(store, "f", us_share=1.0, last_verified="2026-09-02T00:00:00")
+        order = [row["company"] for row in store.registry_targets(limit=10)]
+        assert order[:2] == ["F", "C"]  # both measured US: the one tried longer ago first
+
+    def test_us_share_is_measured_from_board_postings_and_kept_on_failure(self, store):
+        """One US posting, one Canadian and one naming no country measure 1/2, not 1/3;
+        a later failure teaches nothing about where a board hires, so the measurement
+        stays, and so does a success that could not measure."""
+        store.add_company("Acme", "greenhouse", "acme")
+        row_id = store.registry_targets(limit=1)[0]["id"]
+
+        def posting(n: int, **fields) -> RawPosting:
+            return RawPosting(
+                source="fake", external_id=str(n), title=f"Role {n}", company="Acme",
+                url=f"https://jobs.example/{n}", **fields,
+            )
+
+        class FakeBoard(AtsAdapter):
+            def fetch_board(self, fetcher, target, today=None):
+                return [
+                    posting(1, country_hint="US"),
+                    posting(2, location_raw="Toronto, ON, Canada"),
+                    posting(3, location_raw="Remote"),
+                ]
+
+        result = FakeBoard().discover(DiscoveryRequest(
+            fetcher=FakeFetcher(), budget=5,
+            targets=[BoardTarget(company="Acme", token="acme", registry_id=row_id)],
+        ))
+        (outcome,) = result.report.__dict__["outcomes"]
+        assert outcome.ok and outcome.us_share == 0.5
+
+        def share() -> float | None:
+            return store.registry_targets(limit=1)[0]["us_share"]
+
+        _record_board_health(store, result.report)
+        assert share() == 0.5
+        store.record_board_outcome(row_id, ok=True, us_share=0.4)
+        assert share() == 0.4
+        store.record_board_outcome(row_id, ok=False, kind="gone")
+        assert share() == 0.4
+        store.record_board_outcome(row_id, ok=True, us_share=None)
+        assert share() == 0.4
 
 
 class TestSparseRecordsDoNotEraseRichOnes:

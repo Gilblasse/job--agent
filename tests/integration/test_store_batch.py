@@ -414,3 +414,31 @@ class TestMigrations:
         assert versions == {1}
         tables = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master")}
         assert "ok" not in tables and "searches" in tables
+
+    def test_a_second_connection_tolerates_the_column_migration(self, tmp_path, monkeypatch):
+        """ALTER TABLE ... ADD COLUMN has no IF NOT EXISTS, and the web app opens the
+        database from several request threads: a connection that read the version as
+        missing and then lost the race to apply it must carry on, not fail the request
+        that opened it."""
+        assert "ADD COLUMN" in schema.MIGRATIONS[-1][1]
+        path = tmp_path / "race.sqlite3"
+        with monkeypatch.context() as older:
+            older.setattr("jobagent.infra.store.MIGRATIONS", schema.MIGRATIONS[:-1])
+            Store(path).close()
+
+        conn = sqlite3.connect(str(path), isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        second = Store.from_connection(conn)
+        apply = second._batch
+
+        def racing(stmts):
+            Store(path).close()  # the other connection lands the same migration first
+            return apply(stmts)
+
+        second._batch = racing
+        second.migrate()
+
+        columns = [row["name"] for row in conn.execute("PRAGMA table_info(company_registry)")]
+        assert columns.count("us_share") == 1
+        version = conn.execute("SELECT MAX(version) AS v FROM schema_migrations").fetchone()["v"]
+        assert version == schema.SCHEMA_VERSION
