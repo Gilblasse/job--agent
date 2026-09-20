@@ -61,34 +61,37 @@ def seed_registry(store: Store, *, only_us: bool = False) -> SeedReport:
     known = store.known_board_keys()
     folded = {(ats, token.lower()) for ats, token in known}
 
-    for row in companies:
-        if only_us and not row.get("us_signal"):
-            continue
-        key = (row["ats"], row["token"])
-        if key not in known and (key[0], key[1].lower()) in folded:
-            # A case variant of this board is already registered: older registries
-            # hold Workday tokens in the site's own case where the seed now carries
-            # them lowercased, and adding the seed's spelling would register the same
-            # board twice. An exact match still goes through add_company so the
-            # seed's refreshed routing metadata lands on it.
-            report.existing += 1
+    # One transaction for the whole seed. add_company opens its own, nesting-safe, so
+    # without this outer block a 28k-row seed was 28k commits and took forty seconds.
+    with store._tx():
+        for row in companies:
+            if only_us and not row.get("us_signal"):
+                continue
+            key = (row["ats"], row["token"])
+            if key not in known and (key[0], key[1].lower()) in folded:
+                # A case variant of this board is already registered: older registries
+                # hold Workday tokens in the site's own case where the seed now carries
+                # them lowercased, and adding the seed's spelling would register the
+                # same board twice. An exact match still goes through add_company so
+                # the seed's refreshed routing metadata lands on it.
+                report.existing += 1
+                report.total += 1
+                report.by_platform[row["ats"]] = report.by_platform.get(row["ats"], 0) + 1
+                continue
+            added = store.add_company(
+                company=row["company"],
+                ats=row["ats"],
+                token=row["token"],
+                domain=row.get("domain"),
+                board_url=row.get("board_url", ""),
+                source="seed",
+                us_signal=bool(row.get("us_signal")),
+                notes=json.dumps(row.get("extra") or {}) if row.get("extra") else "",
+            )
+            report.added += int(added)
+            report.existing += int(not added)
             report.total += 1
             report.by_platform[row["ats"]] = report.by_platform.get(row["ats"], 0) + 1
-            continue
-        added = store.add_company(
-            company=row["company"],
-            ats=row["ats"],
-            token=row["token"],
-            domain=row.get("domain"),
-            board_url=row.get("board_url", ""),
-            source="seed",
-            us_signal=bool(row.get("us_signal")),
-            notes=json.dumps(row.get("extra") or {}) if row.get("extra") else "",
-        )
-        report.added += int(added)
-        report.existing += int(not added)
-        report.total += 1
-        report.by_platform[row["ats"]] = report.by_platform.get(row["ats"], 0) + 1
 
     return report
 
